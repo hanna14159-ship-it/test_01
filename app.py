@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo
 
 import streamlit as st
 from openpyxl import load_workbook
-from openpyxl.styles import Alignment, Border, Side, Font
+from openpyxl.styles import Alignment
 
 
 # ==================================================
@@ -25,8 +25,13 @@ MACHINES = [
     "51", "52", "53", "54",
 ]
 
+# 11호기, 51호기만
+# 증기 입구/중앙/출구 칸에
+# 첫째 줄: 유량
+# 둘째 줄: 압력
 FLOW_PRESSURE_MACHINES = ["11", "51"]
 
+# 호기별 Excel 입력 행
 MACHINE_ROW_MAP = {
     "11": 8,
     "12": 9,
@@ -204,23 +209,23 @@ def save_or_update_record(record):
               AND machine = ?
             """,
             (
-                record[1],
-                record[3],
-                record[4],
-                record[5],
-                record[6],
-                record[7],
-                record[8],
-                record[9],
-                record[10],
-                record[11],
-                record[12],
-                record[13],
-                record[14],
-                record[15],
-                record[17],
-                record[0],
-                record[2],
+                record[1],    # 점검 시간
+                record[3],    # 제품명
+                record[4],    # 열교환기 온도
+                record[5],    # 유탕온도 설정
+                record[6],    # 유탕온도 현재
+                record[7],    # 증기 사용량
+                record[8],    # C/T수
+                record[9],    # 입구 유량
+                record[10],   # 입구 압력
+                record[11],   # 중앙 유량
+                record[12],   # 중앙 압력
+                record[13],   # 출구 유량
+                record[14],   # 출구 압력
+                record[15],   # 비고
+                record[17],   # 수정 시각
+                record[0],    # 날짜
+                record[2],    # 호기
             ),
         )
 
@@ -388,26 +393,16 @@ def make_flow_pressure_text(flow, pressure):
 
 def write_multiline_cell(worksheet, cell_address, value):
     """
-    셀 기존 서식은 최대한 유지하고,
-    값만 두 줄로 입력한다.
+    원본 셀 서식은 건드리지 않고 값만 넣는다.
+    줄바꿈 표시를 위해 wrap_text만 기존 정렬 기반으로 켠다.
+
+    테두리, 결재칸, 행높이, 열너비는 건드리지 않는다.
     """
 
     cell = worksheet[cell_address]
-
-    old_font = copy(cell.font)
-    old_fill = copy(cell.fill)
-    old_border = copy(cell.border)
-    old_alignment = copy(cell.alignment)
-    old_number_format = cell.number_format
-    old_protection = copy(cell.protection)
-
     cell.value = value
 
-    cell.font = old_font
-    cell.fill = old_fill
-    cell.border = old_border
-    cell.number_format = old_number_format
-    cell.protection = old_protection
+    old_alignment = copy(cell.alignment)
 
     cell.alignment = Alignment(
         horizontal=old_alignment.horizontal,
@@ -419,153 +414,16 @@ def write_multiline_cell(worksheet, cell_address, value):
     )
 
 
-def force_right_border(worksheet, cell_address, style="medium"):
-    """
-    특정 셀의 오른쪽 테두리를 강제로 다시 그린다.
-    증기 압력칸 우측 테두리 깨짐 방지용.
-    """
-
-    cell = worksheet[cell_address]
-    old_border = copy(cell.border)
-
-    cell.border = Border(
-        left=old_border.left,
-        right=Side(style=style, color="000000"),
-        top=old_border.top,
-        bottom=old_border.bottom,
-        diagonal=old_border.diagonal,
-        diagonal_direction=old_border.diagonal_direction,
-        diagonalUp=old_border.diagonalUp,
-        diagonalDown=old_border.diagonalDown,
-        outline=old_border.outline,
-    )
-
-
-def draw_approval_box(worksheet):
-    """
-    결재칸이 openpyxl 저장 과정에서 사라지는 것을 막기 위해
-    H4:K5 영역에 결재칸을 다시 그린다.
-
-    H4:H5 = 결재
-    I4 = 담당
-    J4 = 검토
-    K4 = 결재
-    I5:K5 = 서명칸
-    """
-
-    merged_ranges = [str(rng) for rng in worksheet.merged_cells.ranges]
-
-    if "H4:H5" not in merged_ranges:
-        worksheet.merge_cells("H4:H5")
-
-    worksheet["H4"] = "결\n재"
-    worksheet["I4"] = "담 당"
-    worksheet["J4"] = "검 토"
-    worksheet["K4"] = "결 재"
-
-    worksheet["I5"] = ""
-    worksheet["J5"] = ""
-    worksheet["K5"] = ""
-
-    medium_side = Side(style="medium", color="000000")
-    thin_side = Side(style="thin", color="000000")
-
-    center_alignment = Alignment(
-        horizontal="center",
-        vertical="center",
-        wrap_text=True,
-    )
-
-    header_font = Font(
-        name="맑은 고딕",
-        size=9,
-        bold=True,
-    )
-
-    normal_font = Font(
-        name="맑은 고딕",
-        size=9,
-        bold=False,
-    )
-
-    border_map = {
-        "H4": Border(
-            left=medium_side,
-            right=thin_side,
-            top=medium_side,
-            bottom=medium_side,
-        ),
-        "H5": Border(
-            left=medium_side,
-            right=thin_side,
-            top=medium_side,
-            bottom=medium_side,
-        ),
-        "I4": Border(
-            left=thin_side,
-            right=thin_side,
-            top=medium_side,
-            bottom=thin_side,
-        ),
-        "J4": Border(
-            left=thin_side,
-            right=thin_side,
-            top=medium_side,
-            bottom=thin_side,
-        ),
-        "K4": Border(
-            left=thin_side,
-            right=medium_side,
-            top=medium_side,
-            bottom=thin_side,
-        ),
-        "I5": Border(
-            left=thin_side,
-            right=thin_side,
-            top=thin_side,
-            bottom=medium_side,
-        ),
-        "J5": Border(
-            left=thin_side,
-            right=thin_side,
-            top=thin_side,
-            bottom=medium_side,
-        ),
-        "K5": Border(
-            left=thin_side,
-            right=medium_side,
-            top=thin_side,
-            bottom=medium_side,
-        ),
-    }
-
-    for cell_address, border in border_map.items():
-        cell = worksheet[cell_address]
-        cell.border = border
-        cell.alignment = center_alignment
-
-        if cell_address in ["H4", "I4", "J4", "K4"]:
-            cell.font = header_font
-        else:
-            cell.font = normal_font
-
-    worksheet.row_dimensions[4].height = 24
-    worksheet.row_dimensions[5].height = 24
-
-    worksheet.column_dimensions["H"].width = 7
-    worksheet.column_dimensions["I"].width = 8
-    worksheet.column_dimensions["J"].width = 8
-    worksheet.column_dimensions["K"].width = 8
-
-
 # ==================================================
 # 6. Excel 생성 함수
 # ==================================================
 
 def make_template_excel(selected_date):
     """
-    기존 .xlsx 양식을 열어서
-    선택 날짜의 점검 기록을 지정된 셀에 입력한다.
+    기존 .xlsx 원본 양식을 그대로 열어서
+    값만 지정된 셀에 입력한다.
+
+    테두리, 결재칸, 행높이, 열너비, 병합셀은 건드리지 않는다.
     """
 
     if not Path(TEMPLATE_PATH).exists():
@@ -585,15 +443,13 @@ def make_template_excel(selected_date):
 
     weekday = weekday_names[selected_date.weekday()]
 
+    # 날짜 값만 입력
     worksheet["A5"] = (
         f"{selected_date.year}년 "
         f"{selected_date.month}월 "
         f"{selected_date.day}일 "
         f"{weekday}요일"
     )
-
-    # 결재칸 복구
-    draw_approval_box(worksheet)
 
     for record in records:
         machine = record["machine"]
@@ -603,6 +459,7 @@ def make_template_excel(selected_date):
 
         row = MACHINE_ROW_MAP[machine]
 
+        # 값만 입력. 원본 셀 서식은 유지.
         worksheet[f"B{row}"] = record["check_time"]
         worksheet[f"C{row}"] = record["product"]
         worksheet[f"D{row}"] = record["heat_temp"]
@@ -639,16 +496,14 @@ def make_template_excel(selected_date):
                 ),
             )
 
-            force_right_border(worksheet, f"K{row}", style="medium")
-
         else:
             worksheet[f"I{row}"] = record["inlet_pressure"]
             worksheet[f"J{row}"] = record["middle_pressure"]
             worksheet[f"K{row}"] = record["outlet_pressure"]
 
-    # 비고는 결재칸/하단 양식과 겹칠 수 있어서
-    # 현재 Excel에는 입력하지 않는다.
-    # 앱 저장 기록에는 비고가 정상 저장된다.
+    # 비고도 일단 엑셀에는 입력하지 않음.
+    # 원본 하단 양식 보호 목적.
+    # 앱 저장 기록에는 비고가 그대로 저장됨.
 
     output = BytesIO()
     workbook.save(output)
