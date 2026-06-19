@@ -1,4 +1,5 @@
 import sqlite3
+from copy import copy
 from datetime import datetime
 from io import BytesIO
 from pathlib import Path
@@ -6,6 +7,7 @@ from zoneinfo import ZoneInfo
 
 import streamlit as st
 from openpyxl import load_workbook
+from openpyxl.styles import Alignment
 
 
 # ==================================================
@@ -14,7 +16,7 @@ from openpyxl import load_workbook
 
 DB_PATH = "steamer.db"
 
-# 반드시 GitHub 저장소에 이 이름으로 업로드해야 함
+# GitHub 저장소에 이 이름으로 올려야 함
 TEMPLATE_PATH = "steamer_template.xlsx"
 
 KST = ZoneInfo("Asia/Seoul")
@@ -25,8 +27,13 @@ MACHINES = [
     "51", "52", "53", "54",
 ]
 
+# 11호기, 51호기는 입구/중앙/출구 칸에
+# 첫째 줄: 유량
+# 둘째 줄: 압력
+# 형태로 입력
+FLOW_PRESSURE_MACHINES = ["11", "51"]
+
 # 호기별 Excel 입력 행
-# 실제 양식에서 호기별 행이 다르면 여기만 수정
 MACHINE_ROW_MAP = {
     "11": 8,
     "12": 9,
@@ -48,18 +55,13 @@ MACHINE_ROW_MAP = {
 # ==================================================
 
 def connect_db():
-    """
-    SQLite DB에 연결한다.
-    """
     return sqlite3.connect(DB_PATH)
 
 
 def create_table():
     """
     점검 기록 테이블 생성.
-
-    UNIQUE(check_date, machine)는
-    같은 날짜 + 같은 호기의 기록이 중복 저장되지 않게 한다.
+    기존 DB에 새 칼럼이 없으면 자동 추가.
     """
 
     with connect_db() as conn:
@@ -78,9 +80,16 @@ def create_table():
                 oil_now_temp REAL,
                 steam_usage REAL,
                 ct_water REAL,
+
+                inlet_flow REAL,
                 inlet_pressure REAL,
+
+                middle_flow REAL,
                 middle_pressure REAL,
+
+                outlet_flow REAL,
                 outlet_pressure REAL,
+
                 memo TEXT,
 
                 created_at TEXT NOT NULL,
@@ -91,15 +100,44 @@ def create_table():
             """
         )
 
+        existing_columns = [
+            row[1]
+            for row in conn.execute(
+                "PRAGMA table_info(steamer_logs)"
+            ).fetchall()
+        ]
+
+        new_columns = {
+            "inlet_flow": "REAL",
+            "middle_flow": "REAL",
+            "outlet_flow": "REAL",
+            "updated_at": "TEXT",
+        }
+
+        for column_name, column_type in new_columns.items():
+            if column_name not in existing_columns:
+                conn.execute(
+                    f"ALTER TABLE steamer_logs "
+                    f"ADD COLUMN {column_name} {column_type}"
+                )
+
+        now_text = datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S")
+
+        conn.execute(
+            """
+            UPDATE steamer_logs
+            SET updated_at = ?
+            WHERE updated_at IS NULL
+               OR updated_at = ''
+            """,
+            (now_text,),
+        )
+
 
 def save_or_update_record(record):
     """
     같은 날짜 + 같은 호기 기록이 없으면 새로 저장.
     이미 있으면 기존 기록 수정.
-
-    반환값:
-    inserted = 새 기록 저장
-    updated = 기존 기록 수정
     """
 
     check_date = record[0]
@@ -129,8 +167,11 @@ def save_or_update_record(record):
                     oil_now_temp,
                     steam_usage,
                     ct_water,
+                    inlet_flow,
                     inlet_pressure,
+                    middle_flow,
                     middle_pressure,
+                    outlet_flow,
                     outlet_pressure,
                     memo,
                     created_at,
@@ -139,7 +180,7 @@ def save_or_update_record(record):
                 VALUES (
                     ?, ?, ?, ?, ?, ?,
                     ?, ?, ?, ?, ?, ?,
-                    ?, ?, ?
+                    ?, ?, ?, ?, ?, ?
                 )
                 """,
                 record,
@@ -158,8 +199,11 @@ def save_or_update_record(record):
                 oil_now_temp = ?,
                 steam_usage = ?,
                 ct_water = ?,
+                inlet_flow = ?,
                 inlet_pressure = ?,
+                middle_flow = ?,
                 middle_pressure = ?,
+                outlet_flow = ?,
                 outlet_pressure = ?,
                 memo = ?,
                 updated_at = ?
@@ -167,20 +211,23 @@ def save_or_update_record(record):
               AND machine = ?
             """,
             (
-                record[1],   # 점검 시간
-                record[3],   # 제품명
-                record[4],   # 열교환기 온도
-                record[5],   # 유탕온도 설정
-                record[6],   # 유탕온도 현재
-                record[7],   # 증기 사용량
-                record[8],   # C/T수
-                record[9],   # 입구 압력
-                record[10],  # 중간 압력
-                record[11],  # 출구 압력
-                record[12],  # 비고
-                record[14],  # 수정 시각
-                record[0],   # 날짜
-                record[2],   # 호기
+                record[1],    # 점검 시간
+                record[3],    # 제품명
+                record[4],    # 열교환기 온도
+                record[5],    # 유탕온도 설정
+                record[6],    # 유탕온도 현재
+                record[7],    # 증기 사용량
+                record[8],    # C/T수
+                record[9],    # 입구 유량
+                record[10],   # 입구 압력
+                record[11],   # 중앙 유량
+                record[12],   # 중앙 압력
+                record[13],   # 출구 유량
+                record[14],   # 출구 압력
+                record[15],   # 비고
+                record[17],   # 수정 시각
+                record[0],    # 날짜
+                record[2],    # 호기
             ),
         )
 
@@ -210,8 +257,11 @@ def load_records(selected_date):
             oil_now_temp,
             steam_usage,
             ct_water,
+            inlet_flow,
             inlet_pressure,
+            middle_flow,
             middle_pressure,
+            outlet_flow,
             outlet_pressure,
             memo,
             created_at,
@@ -253,14 +303,8 @@ def parse_number(value, label):
     """
     문자 입력값을 숫자로 변환한다.
 
-    허용 예:
-    10
-    10.1
-    10.12
-    10.12345
-
     빈칸은 None으로 저장.
-    소수점 아래 5자리 초과는 오류.
+    소수점 아래 5자리까지 허용.
     """
 
     value = value.strip()
@@ -284,10 +328,21 @@ def parse_number(value, label):
     return number
 
 
+def format_number(value):
+    """
+    Excel 한 칸 안에 들어갈 숫자를 보기 좋게 변환.
+    None이면 빈칸.
+    """
+
+    if value is None:
+        return ""
+
+    return str(value)
+
+
 def number_text_input(label, key):
     """
     + / - 버튼 없는 숫자 입력칸.
-    st.number_input이 아니라 st.text_input을 사용한다.
     """
 
     return st.text_input(
@@ -318,7 +373,49 @@ def get_machine_from_url():
 
 
 # ==================================================
-# 5. Excel 생성 함수 - xlsx / openpyxl 버전
+# 5. Excel 보조 함수
+# ==================================================
+
+def make_flow_pressure_text(flow, pressure):
+    """
+    유량과 압력을 한 셀에 두 줄로 넣는다.
+
+    첫째 줄: 유량
+    둘째 줄: 압력
+    """
+
+    flow_text = format_number(flow)
+    pressure_text = format_number(pressure)
+
+    if flow_text == "" and pressure_text == "":
+        return ""
+
+    return f"{flow_text}\n{pressure_text}"
+
+
+def write_multiline_cell(worksheet, cell_address, value):
+    """
+    셀에 줄바꿈 값을 넣고 자동 줄바꿈을 켠다.
+    기존 정렬 정보는 최대한 유지한다.
+    """
+
+    cell = worksheet[cell_address]
+    cell.value = value
+
+    old_alignment = copy(cell.alignment)
+
+    cell.alignment = Alignment(
+        horizontal=old_alignment.horizontal,
+        vertical=old_alignment.vertical,
+        text_rotation=old_alignment.text_rotation,
+        wrap_text=True,
+        shrink_to_fit=old_alignment.shrink_to_fit,
+        indent=old_alignment.indent,
+    )
+
+
+# ==================================================
+# 6. Excel 생성 함수
 # ==================================================
 
 def make_template_excel(selected_date):
@@ -345,7 +442,6 @@ def make_template_excel(selected_date):
     weekday = weekday_names[selected_date.weekday()]
 
     # 날짜 입력 셀
-    # 실제 양식에서 날짜 위치가 다르면 A5 수정
     worksheet["A5"] = (
         f"{selected_date.year}년 "
         f"{selected_date.month}월 "
@@ -361,7 +457,6 @@ def make_template_excel(selected_date):
 
         row = MACHINE_ROW_MAP[machine]
 
-        # 실제 양식에서 열 위치가 다르면 여기 수정
         worksheet[f"B{row}"] = record["check_time"]
         worksheet[f"C{row}"] = record["product"]
         worksheet[f"D{row}"] = record["heat_temp"]
@@ -369,9 +464,42 @@ def make_template_excel(selected_date):
         worksheet[f"F{row}"] = record["oil_now_temp"]
         worksheet[f"G{row}"] = record["steam_usage"]
         worksheet[f"H{row}"] = record["ct_water"]
-        worksheet[f"I{row}"] = record["inlet_pressure"]
-        worksheet[f"J{row}"] = record["middle_pressure"]
-        worksheet[f"K{row}"] = record["outlet_pressure"]
+
+        if machine in FLOW_PRESSURE_MACHINES:
+            write_multiline_cell(
+                worksheet,
+                f"I{row}",
+                make_flow_pressure_text(
+                    record["inlet_flow"],
+                    record["inlet_pressure"],
+                ),
+            )
+
+            write_multiline_cell(
+                worksheet,
+                f"J{row}",
+                make_flow_pressure_text(
+                    record["middle_flow"],
+                    record["middle_pressure"],
+                ),
+            )
+
+            write_multiline_cell(
+                worksheet,
+                f"K{row}",
+                make_flow_pressure_text(
+                    record["outlet_flow"],
+                    record["outlet_pressure"],
+                ),
+            )
+
+            # 두 줄이 보이도록 행 높이 조정
+            worksheet.row_dimensions[row].height = 30
+
+        else:
+            worksheet[f"I{row}"] = record["inlet_pressure"]
+            worksheet[f"J{row}"] = record["middle_pressure"]
+            worksheet[f"K{row}"] = record["outlet_pressure"]
 
     memo_lines = []
 
@@ -385,7 +513,6 @@ def make_template_excel(selected_date):
             )
 
     # 비고 입력 셀
-    # 실제 양식에서 비고 위치가 다르면 A21 수정
     if memo_lines:
         worksheet["A21"] = "\n".join(memo_lines)
 
@@ -397,7 +524,7 @@ def make_template_excel(selected_date):
 
 
 # ==================================================
-# 6. 앱 초기 설정
+# 7. 앱 초기 설정
 # ==================================================
 
 st.set_page_config(
@@ -417,7 +544,7 @@ else:
 
 
 # ==================================================
-# 7. 화면 구성
+# 8. 화면 구성
 # ==================================================
 
 st.title("증숙기 점검일지")
@@ -433,7 +560,7 @@ tab_input, tab_records, tab_manage, tab_excel = st.tabs(
 
 
 # ==================================================
-# 8. 점검 입력 탭
+# 9. 점검 입력 탭
 # ==================================================
 
 with tab_input:
@@ -489,20 +616,58 @@ with tab_input:
         "ct_water",
     )
 
-    inlet_pressure_text = number_text_input(
-        "입구 압력",
-        "inlet_pressure",
-    )
+    if machine in FLOW_PRESSURE_MACHINES:
+        st.markdown("#### 증기 입구 / 중앙 / 출구")
 
-    middle_pressure_text = number_text_input(
-        "중간 압력",
-        "middle_pressure",
-    )
+        inlet_flow_text = number_text_input(
+            "입구 유량",
+            "inlet_flow",
+        )
 
-    outlet_pressure_text = number_text_input(
-        "출구 압력",
-        "outlet_pressure",
-    )
+        inlet_pressure_text = number_text_input(
+            "입구 압력",
+            "inlet_pressure",
+        )
+
+        middle_flow_text = number_text_input(
+            "중앙 유량",
+            "middle_flow",
+        )
+
+        middle_pressure_text = number_text_input(
+            "중앙 압력",
+            "middle_pressure",
+        )
+
+        outlet_flow_text = number_text_input(
+            "출구 유량",
+            "outlet_flow",
+        )
+
+        outlet_pressure_text = number_text_input(
+            "출구 압력",
+            "outlet_pressure",
+        )
+
+    else:
+        inlet_flow_text = ""
+        middle_flow_text = ""
+        outlet_flow_text = ""
+
+        inlet_pressure_text = number_text_input(
+            "입구 압력",
+            "inlet_pressure",
+        )
+
+        middle_pressure_text = number_text_input(
+            "중앙 압력",
+            "middle_pressure",
+        )
+
+        outlet_pressure_text = number_text_input(
+            "출구 압력",
+            "outlet_pressure",
+        )
 
     memo = st.text_area("비고")
 
@@ -545,14 +710,29 @@ with tab_input:
                 "C/T수",
             )
 
+            inlet_flow = parse_number(
+                inlet_flow_text,
+                "입구 유량",
+            )
+
             inlet_pressure = parse_number(
                 inlet_pressure_text,
                 "입구 압력",
             )
 
+            middle_flow = parse_number(
+                middle_flow_text,
+                "중앙 유량",
+            )
+
             middle_pressure = parse_number(
                 middle_pressure_text,
-                "중간 압력",
+                "중앙 압력",
+            )
+
+            outlet_flow = parse_number(
+                outlet_flow_text,
+                "출구 유량",
             )
 
             outlet_pressure = parse_number(
@@ -570,8 +750,11 @@ with tab_input:
                 oil_now_temp,
                 steam_usage,
                 ct_water,
+                inlet_flow,
                 inlet_pressure,
+                middle_flow,
                 middle_pressure,
+                outlet_flow,
                 outlet_pressure,
                 memo.strip(),
                 current_time,
@@ -602,7 +785,7 @@ with tab_input:
 
 
 # ==================================================
-# 9. 저장 기록 탭
+# 10. 저장 기록 탭
 # ==================================================
 
 with tab_records:
@@ -637,8 +820,11 @@ with tab_records:
                     "유탕온도 현재": record["oil_now_temp"],
                     "증기사용량": record["steam_usage"],
                     "C/T수": record["ct_water"],
+                    "입구유량": record["inlet_flow"],
                     "입구압력": record["inlet_pressure"],
-                    "중간압력": record["middle_pressure"],
+                    "중앙유량": record["middle_flow"],
+                    "중앙압력": record["middle_pressure"],
+                    "출구유량": record["outlet_flow"],
                     "출구압력": record["outlet_pressure"],
                     "비고": record["memo"],
                     "최초 등록": record["created_at"],
@@ -656,7 +842,7 @@ with tab_records:
 
 
 # ==================================================
-# 10. 기록 관리 탭
+# 11. 기록 관리 탭
 # ==================================================
 
 with tab_manage:
@@ -735,7 +921,7 @@ with tab_manage:
 
 
 # ==================================================
-# 11. Excel 다운로드 탭
+# 12. Excel 다운로드 탭
 # ==================================================
 
 with tab_excel:
