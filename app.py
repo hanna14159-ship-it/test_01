@@ -5,8 +5,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import streamlit as st
-from xlrd import open_workbook
-from xlutils.copy import copy as copy_workbook
+from openpyxl import load_workbook
 
 
 # ==================================================
@@ -14,7 +13,10 @@ from xlutils.copy import copy as copy_workbook
 # ==================================================
 
 DB_PATH = "steamer.db"
-TEMPLATE_PATH = "steamer_template.xls"
+
+# 반드시 GitHub 저장소에 이 이름으로 업로드해야 함
+TEMPLATE_PATH = "steamer_template.xlsx"
+
 KST = ZoneInfo("Asia/Seoul")
 
 MACHINES = [
@@ -24,7 +26,7 @@ MACHINES = [
 ]
 
 # 호기별 Excel 입력 행
-# 실제 양식과 다르면 여기만 수정하면 됩니다.
+# 실제 양식에서 호기별 행이 다르면 여기만 수정
 MACHINE_ROW_MAP = {
     "11": 8,
     "12": 9,
@@ -46,10 +48,20 @@ MACHINE_ROW_MAP = {
 # ==================================================
 
 def connect_db():
+    """
+    SQLite DB에 연결한다.
+    """
     return sqlite3.connect(DB_PATH)
 
 
 def create_table():
+    """
+    점검 기록 테이블 생성.
+
+    UNIQUE(check_date, machine)는
+    같은 날짜 + 같은 호기의 기록이 중복 저장되지 않게 한다.
+    """
+
     with connect_db() as conn:
         conn.execute(
             """
@@ -81,6 +93,15 @@ def create_table():
 
 
 def save_or_update_record(record):
+    """
+    같은 날짜 + 같은 호기 기록이 없으면 새로 저장.
+    이미 있으면 기존 기록 수정.
+
+    반환값:
+    inserted = 새 기록 저장
+    updated = 기존 기록 수정
+    """
+
     check_date = record[0]
     machine = record[2]
 
@@ -123,6 +144,7 @@ def save_or_update_record(record):
                 """,
                 record,
             )
+
             return "inserted"
 
         conn.execute(
@@ -145,26 +167,31 @@ def save_or_update_record(record):
               AND machine = ?
             """,
             (
-                record[1],
-                record[3],
-                record[4],
-                record[5],
-                record[6],
-                record[7],
-                record[8],
-                record[9],
-                record[10],
-                record[11],
-                record[12],
-                record[14],
-                record[0],
-                record[2],
+                record[1],   # 점검 시간
+                record[3],   # 제품명
+                record[4],   # 열교환기 온도
+                record[5],   # 유탕온도 설정
+                record[6],   # 유탕온도 현재
+                record[7],   # 증기 사용량
+                record[8],   # C/T수
+                record[9],   # 입구 압력
+                record[10],  # 중간 압력
+                record[11],  # 출구 압력
+                record[12],  # 비고
+                record[14],  # 수정 시각
+                record[0],   # 날짜
+                record[2],   # 호기
             ),
         )
+
         return "updated"
 
 
 def load_records(selected_date):
+    """
+    선택한 날짜의 점검 기록을 불러온다.
+    """
+
     date_text = selected_date.isoformat()
 
     conn = connect_db()
@@ -197,10 +224,15 @@ def load_records(selected_date):
     ).fetchall()
 
     conn.close()
+
     return records
 
 
 def delete_record(record_id):
+    """
+    id 기준으로 점검 기록 한 건 삭제.
+    """
+
     with connect_db() as conn:
         cursor = conn.execute(
             """
@@ -209,6 +241,7 @@ def delete_record(record_id):
             """,
             (record_id,),
         )
+
         return cursor.rowcount
 
 
@@ -218,9 +251,16 @@ def delete_record(record_id):
 
 def parse_number(value, label):
     """
-    + / - 버튼 없는 text_input 값을 숫자로 변환합니다.
-    빈칸은 None으로 저장합니다.
-    소수점 아래 5자리까지만 허용합니다.
+    문자 입력값을 숫자로 변환한다.
+
+    허용 예:
+    10
+    10.1
+    10.12
+    10.12345
+
+    빈칸은 None으로 저장.
+    소수점 아래 5자리 초과는 오류.
     """
 
     value = value.strip()
@@ -234,7 +274,8 @@ def parse_number(value, label):
         raise ValueError(f"{label}은 숫자만 입력해야 합니다.")
 
     if "." in value:
-        decimal_part = value.split(".", 1)[1]
+        decimal_part = value.split(".")[1]
+
         if len(decimal_part) > 5:
             raise ValueError(
                 f"{label}은 소수점 아래 5자리까지만 입력 가능합니다."
@@ -244,6 +285,11 @@ def parse_number(value, label):
 
 
 def number_text_input(label, key):
+    """
+    + / - 버튼 없는 숫자 입력칸.
+    st.number_input이 아니라 st.text_input을 사용한다.
+    """
+
     return st.text_input(
         label,
         key=key,
@@ -256,6 +302,13 @@ def number_text_input(label, key):
 # ==================================================
 
 def get_machine_from_url():
+    """
+    URL의 machine 값을 읽는다.
+
+    예:
+    ?machine=11
+    """
+
     machine = st.query_params.get("machine")
 
     if machine in MACHINES:
@@ -265,67 +318,39 @@ def get_machine_from_url():
 
 
 # ==================================================
-# 5. XLS 서식 유지 입력 함수
-# ==================================================
-
-def write_keep_style(read_sheet, write_sheet, write_workbook, row, col, value):
-    """
-    기존 .xls 셀의 서식을 유지하면서 값을 입력합니다.
-
-    row, col은 0부터 시작합니다.
-    예: Excel B8 = row 7, col 1
-    """
-
-    try:
-        style_index = read_sheet.cell_xf_index(row, col)
-        style = write_workbook._Workbook__styles[style_index]
-        write_sheet.write(row, col, value, style)
-    except Exception:
-        # 서식 복사가 실패해도 값 입력은 시도합니다.
-        write_sheet.write(row, col, value)
-
-
-# ==================================================
-# 6. Excel 생성
+# 5. Excel 생성 함수 - xlsx / openpyxl 버전
 # ==================================================
 
 def make_template_excel(selected_date):
+    """
+    기존 .xlsx 양식을 열어서
+    선택 날짜의 점검 기록을 지정된 셀에 입력한다.
+    """
+
     if not Path(TEMPLATE_PATH).exists():
         raise FileNotFoundError(
             f"{TEMPLATE_PATH} 파일을 찾을 수 없습니다. "
-            "GitHub 저장소에 steamer_template.xls 파일을 올렸는지 확인하세요."
+            "GitHub 저장소에 steamer_template.xlsx 파일을 올렸는지 확인하세요."
         )
 
     records = load_records(selected_date)
 
-    # formatting_info=True: 기존 .xls 서식을 최대한 보존하기 위한 옵션
-    read_workbook = open_workbook(
-        TEMPLATE_PATH,
-        formatting_info=True,
-    )
-    read_sheet = read_workbook.sheet_by_index(0)
-
-    workbook = copy_workbook(read_workbook)
-    worksheet = workbook.get_sheet(0)
+    workbook = load_workbook(TEMPLATE_PATH)
+    worksheet = workbook.active
 
     weekday_names = [
         "월", "화", "수", "목", "금", "토", "일"
     ]
+
     weekday = weekday_names[selected_date.weekday()]
 
-    # 날짜 입력: Excel A5 = row 4, col 0
-    write_keep_style(
-        read_sheet,
-        worksheet,
-        workbook,
-        4,
-        0,
-        (
-            f"{selected_date.year}년 "
-            f"{selected_date.month}월 "
-            f"{selected_date.day}일 "
-            f"{weekday}요일"
-        ),
+    # 날짜 입력 셀
+    # 실제 양식에서 날짜 위치가 다르면 A5 수정
+    worksheet["A5"] = (
+        f"{selected_date.year}년 "
+        f"{selected_date.month}월 "
+        f"{selected_date.day}일 "
+        f"{weekday}요일"
     )
 
     for record in records:
@@ -334,39 +359,35 @@ def make_template_excel(selected_date):
         if machine not in MACHINE_ROW_MAP:
             continue
 
-        # Excel 8행이면 xlwt에서는 row index 7
-        row = MACHINE_ROW_MAP[machine] - 1
+        row = MACHINE_ROW_MAP[machine]
 
-        # Excel B열 = col 1
-        write_keep_style(read_sheet, worksheet, workbook, row, 1, record["check_time"])
-        write_keep_style(read_sheet, worksheet, workbook, row, 2, record["product"])
-        write_keep_style(read_sheet, worksheet, workbook, row, 3, record["heat_temp"])
-        write_keep_style(read_sheet, worksheet, workbook, row, 4, record["oil_set_temp"])
-        write_keep_style(read_sheet, worksheet, workbook, row, 5, record["oil_now_temp"])
-        write_keep_style(read_sheet, worksheet, workbook, row, 6, record["steam_usage"])
-        write_keep_style(read_sheet, worksheet, workbook, row, 7, record["ct_water"])
-        write_keep_style(read_sheet, worksheet, workbook, row, 8, record["inlet_pressure"])
-        write_keep_style(read_sheet, worksheet, workbook, row, 9, record["middle_pressure"])
-        write_keep_style(read_sheet, worksheet, workbook, row, 10, record["outlet_pressure"])
+        # 실제 양식에서 열 위치가 다르면 여기 수정
+        worksheet[f"B{row}"] = record["check_time"]
+        worksheet[f"C{row}"] = record["product"]
+        worksheet[f"D{row}"] = record["heat_temp"]
+        worksheet[f"E{row}"] = record["oil_set_temp"]
+        worksheet[f"F{row}"] = record["oil_now_temp"]
+        worksheet[f"G{row}"] = record["steam_usage"]
+        worksheet[f"H{row}"] = record["ct_water"]
+        worksheet[f"I{row}"] = record["inlet_pressure"]
+        worksheet[f"J{row}"] = record["middle_pressure"]
+        worksheet[f"K{row}"] = record["outlet_pressure"]
 
     memo_lines = []
+
     for record in records:
         machine = record["machine"]
         memo = record["memo"]
 
         if memo is not None and memo.strip() != "":
-            memo_lines.append(f"{machine}호기: {memo.strip()}")
+            memo_lines.append(
+                f"{machine}호기: {memo.strip()}"
+            )
 
-    # 비고 입력: Excel A21 = row 20, col 0
+    # 비고 입력 셀
+    # 실제 양식에서 비고 위치가 다르면 A21 수정
     if memo_lines:
-        write_keep_style(
-            read_sheet,
-            worksheet,
-            workbook,
-            20,
-            0,
-            "\n".join(memo_lines),
-        )
+        worksheet["A21"] = "\n".join(memo_lines)
 
     output = BytesIO()
     workbook.save(output)
@@ -376,7 +397,7 @@ def make_template_excel(selected_date):
 
 
 # ==================================================
-# 7. 앱 초기 설정
+# 6. 앱 초기 설정
 # ==================================================
 
 st.set_page_config(
@@ -396,7 +417,7 @@ else:
 
 
 # ==================================================
-# 8. 화면 구성
+# 7. 화면 구성
 # ==================================================
 
 st.title("증숙기 점검일지")
@@ -412,16 +433,17 @@ tab_input, tab_records, tab_manage, tab_excel = st.tabs(
 
 
 # ==================================================
-# 9. 점검 입력 탭
+# 8. 점검 입력 탭
 # ==================================================
 
 with tab_input:
+
     st.subheader("증숙기 점검값 입력")
 
     now = datetime.now(KST)
 
     st.info(
-        "점검 날짜/시간은 저장 버튼을 누르는 현재 시각으로 자동 저장됩니다. "
+        f"점검 날짜/시간은 저장 버튼을 누르는 현재 시각으로 자동 저장됩니다. "
         f"현재 기준: {now.strftime('%Y-%m-%d %H:%M')}"
     )
 
@@ -430,7 +452,9 @@ with tab_input:
             f"QR을 통해 {qr_machine}호기가 자동 선택되었습니다."
         )
     else:
-        st.info("QR 접속이 아닙니다. 호기를 직접 선택해 주세요.")
+        st.info(
+            "QR 접속이 아닙니다. 호기를 직접 선택해 주세요."
+        )
 
     machine = st.selectbox(
         "호기 선택",
@@ -440,14 +464,45 @@ with tab_input:
 
     product = st.text_input("제품명")
 
-    heat_temp_text = number_text_input("열교환기 온도", "heat_temp")
-    oil_set_temp_text = number_text_input("유탕온도 설정", "oil_set_temp")
-    oil_now_temp_text = number_text_input("유탕온도 현재", "oil_now_temp")
-    steam_usage_text = number_text_input("증기 사용량", "steam_usage")
-    ct_water_text = number_text_input("C/T수", "ct_water")
-    inlet_pressure_text = number_text_input("입구 압력", "inlet_pressure")
-    middle_pressure_text = number_text_input("중간 압력", "middle_pressure")
-    outlet_pressure_text = number_text_input("출구 압력", "outlet_pressure")
+    heat_temp_text = number_text_input(
+        "열교환기 온도",
+        "heat_temp",
+    )
+
+    oil_set_temp_text = number_text_input(
+        "유탕온도 설정",
+        "oil_set_temp",
+    )
+
+    oil_now_temp_text = number_text_input(
+        "유탕온도 현재",
+        "oil_now_temp",
+    )
+
+    steam_usage_text = number_text_input(
+        "증기 사용량",
+        "steam_usage",
+    )
+
+    ct_water_text = number_text_input(
+        "C/T수",
+        "ct_water",
+    )
+
+    inlet_pressure_text = number_text_input(
+        "입구 압력",
+        "inlet_pressure",
+    )
+
+    middle_pressure_text = number_text_input(
+        "중간 압력",
+        "middle_pressure",
+    )
+
+    outlet_pressure_text = number_text_input(
+        "출구 압력",
+        "outlet_pressure",
+    )
 
     memo = st.text_area("비고")
 
@@ -457,6 +512,7 @@ with tab_input:
     )
 
     if submitted:
+
         try:
             save_time = datetime.now(KST)
 
@@ -464,14 +520,45 @@ with tab_input:
             check_time = save_time.strftime("%H:%M")
             current_time = save_time.strftime("%Y-%m-%d %H:%M:%S")
 
-            heat_temp = parse_number(heat_temp_text, "열교환기 온도")
-            oil_set_temp = parse_number(oil_set_temp_text, "유탕온도 설정")
-            oil_now_temp = parse_number(oil_now_temp_text, "유탕온도 현재")
-            steam_usage = parse_number(steam_usage_text, "증기 사용량")
-            ct_water = parse_number(ct_water_text, "C/T수")
-            inlet_pressure = parse_number(inlet_pressure_text, "입구 압력")
-            middle_pressure = parse_number(middle_pressure_text, "중간 압력")
-            outlet_pressure = parse_number(outlet_pressure_text, "출구 압력")
+            heat_temp = parse_number(
+                heat_temp_text,
+                "열교환기 온도",
+            )
+
+            oil_set_temp = parse_number(
+                oil_set_temp_text,
+                "유탕온도 설정",
+            )
+
+            oil_now_temp = parse_number(
+                oil_now_temp_text,
+                "유탕온도 현재",
+            )
+
+            steam_usage = parse_number(
+                steam_usage_text,
+                "증기 사용량",
+            )
+
+            ct_water = parse_number(
+                ct_water_text,
+                "C/T수",
+            )
+
+            inlet_pressure = parse_number(
+                inlet_pressure_text,
+                "입구 압력",
+            )
+
+            middle_pressure = parse_number(
+                middle_pressure_text,
+                "중간 압력",
+            )
+
+            outlet_pressure = parse_number(
+                outlet_pressure_text,
+                "출구 압력",
+            )
 
             record = (
                 check_date.isoformat(),
@@ -498,6 +585,7 @@ with tab_input:
                     f"{machine}호기 점검 기록이 새로 저장되었습니다. "
                     f"저장시간: {current_time}"
                 )
+
             elif result == "updated":
                 st.success(
                     f"{machine}호기 기존 기록이 수정되었습니다. "
@@ -506,15 +594,19 @@ with tab_input:
 
         except ValueError as error:
             st.error(str(error))
+
         except sqlite3.Error as error:
-            st.error(f"저장 또는 수정 중 오류가 발생했습니다: {error}")
+            st.error(
+                f"저장 또는 수정 중 오류가 발생했습니다: {error}"
+            )
 
 
 # ==================================================
-# 10. 저장 기록 탭
+# 9. 저장 기록 탭
 # ==================================================
 
 with tab_records:
+
     st.subheader("날짜별 저장 기록")
 
     search_date = st.date_input(
@@ -525,7 +617,10 @@ with tab_records:
     records = load_records(search_date)
 
     if not records:
-        st.info(f"{search_date.isoformat()}에 저장된 기록이 없습니다.")
+        st.info(
+            f"{search_date.isoformat()}에 저장된 기록이 없습니다."
+        )
+
     else:
         display_records = []
 
@@ -552,6 +647,7 @@ with tab_records:
             )
 
         st.write(f"총 {len(display_records)}건")
+
         st.dataframe(
             display_records,
             use_container_width=True,
@@ -560,10 +656,11 @@ with tab_records:
 
 
 # ==================================================
-# 11. 기록 관리 탭
+# 10. 기록 관리 탭
 # ==================================================
 
 with tab_manage:
+
     st.subheader("저장 기록 삭제")
 
     manage_date = st.date_input(
@@ -574,7 +671,10 @@ with tab_manage:
     manage_records = load_records(manage_date)
 
     if not manage_records:
-        st.info(f"{manage_date.isoformat()}에 저장된 기록이 없습니다.")
+        st.info(
+            f"{manage_date.isoformat()}에 저장된 기록이 없습니다."
+        )
+
     else:
         record_options = {}
 
@@ -585,6 +685,7 @@ with tab_manage:
                 f'{record["check_time"]} | '
                 f'{record["product"]}'
             )
+
             record_options[label] = record["id"]
 
         selected_label = st.selectbox(
@@ -603,27 +704,42 @@ with tab_manage:
             type="primary",
             use_container_width=True,
         ):
+
             if not delete_confirmed:
-                st.warning("삭제 확인 체크박스를 선택해 주세요.")
+                st.warning(
+                    "삭제 확인 체크박스를 선택해 주세요."
+                )
+
             else:
                 try:
-                    deleted_count = delete_record(selected_record_id)
+                    deleted_count = delete_record(
+                        selected_record_id
+                    )
 
                     if deleted_count == 1:
-                        st.success("선택한 기록이 삭제되었습니다.")
+                        st.success(
+                            "선택한 기록이 삭제되었습니다."
+                        )
+
                         st.rerun()
+
                     else:
-                        st.warning("삭제할 기록을 찾을 수 없습니다.")
+                        st.warning(
+                            "삭제할 기록을 찾을 수 없습니다."
+                        )
 
                 except sqlite3.Error as error:
-                    st.error(f"삭제 중 오류가 발생했습니다: {error}")
+                    st.error(
+                        f"삭제 중 오류가 발생했습니다: {error}"
+                    )
 
 
 # ==================================================
-# 12. Excel 다운로드 탭
+# 11. Excel 다운로드 탭
 # ==================================================
 
 with tab_excel:
+
     st.subheader("기존 증숙기 점검일지 생성")
 
     excel_date = st.date_input(
@@ -634,26 +750,41 @@ with tab_excel:
     records = load_records(excel_date)
 
     if not records:
-        st.warning(f"{excel_date.isoformat()}에 저장된 기록이 없습니다.")
+        st.warning(
+            f"{excel_date.isoformat()}에 저장된 기록이 없습니다."
+        )
+
     else:
         try:
-            excel_file, machine_count = make_template_excel(excel_date)
+            excel_file, machine_count = make_template_excel(
+                excel_date
+            )
 
-            file_name = f"증숙기_점검일지_{excel_date.isoformat()}.xls"
+            file_name = (
+                f"증숙기_점검일지_"
+                f"{excel_date.isoformat()}.xlsx"
+            )
 
             st.write(
-                f"{machine_count}개 호기의 기록이 Excel 양식에 입력됩니다."
+                f"{machine_count}개 호기의 기록이 "
+                "Excel 양식에 입력됩니다."
             )
 
             st.download_button(
                 label="기존 양식 Excel 다운로드",
                 data=excel_file,
                 file_name=file_name,
-                mime="application/vnd.ms-excel",
+                mime=(
+                    "application/vnd.openxmlformats-"
+                    "officedocument.spreadsheetml.sheet"
+                ),
                 use_container_width=True,
             )
 
         except FileNotFoundError as error:
             st.error(str(error))
+
         except Exception as error:
-            st.error(f"Excel 생성 중 오류가 발생했습니다: {error}")
+            st.error(
+                f"Excel 생성 중 오류가 발생했습니다: {error}"
+            )
