@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 import streamlit as st
 from openpyxl import load_workbook
 from openpyxl.styles import Alignment
+from openpyxl.drawing.image import Image
 
 
 # ==================================================
@@ -16,6 +17,7 @@ from openpyxl.styles import Alignment
 
 DB_PATH = "steamer.db"
 TEMPLATE_PATH = "steamer_template.xlsx"
+APPROVAL_IMAGE_PATH = "approval_box.png"
 
 KST = ZoneInfo("Asia/Seoul")
 
@@ -414,6 +416,31 @@ def write_multiline_cell(worksheet, cell_address, value):
     )
 
 
+def insert_approval_image(worksheet):
+    """
+    결재칸 PNG 이미지를 Excel에 삽입한다.
+
+    GitHub 저장소에 approval_box.png 파일이 있어야 한다.
+    위치와 크기는 아래 width, height, anchor 값으로 조절한다.
+    """
+
+    if not Path(APPROVAL_IMAGE_PATH).exists():
+        return
+
+    approval_image = Image(APPROVAL_IMAGE_PATH)
+
+    # 결재칸 그림 크기
+    # 안 맞으면 이 숫자만 조절하면 됨
+    approval_image.width = 220
+    approval_image.height = 60
+
+    # 결재칸 위치
+    # 오른쪽으로 옮기려면 I4, 아래로 내리려면 H5 식으로 조절
+    approval_image.anchor = "H4"
+
+    worksheet.add_image(approval_image)
+
+
 # ==================================================
 # 6. Excel 생성 함수
 # ==================================================
@@ -423,7 +450,8 @@ def make_template_excel(selected_date):
     기존 .xlsx 원본 양식을 그대로 열어서
     값만 지정된 셀에 입력한다.
 
-    테두리, 결재칸, 행높이, 열너비, 병합셀은 건드리지 않는다.
+    결재칸은 approval_box.png를 삽입한다.
+    테두리, 행높이, 열너비, 병합셀은 건드리지 않는다.
     """
 
     if not Path(TEMPLATE_PATH).exists():
@@ -450,6 +478,9 @@ def make_template_excel(selected_date):
         f"{selected_date.day}일 "
         f"{weekday}요일"
     )
+
+    # 결재칸 PNG 삽입
+    insert_approval_image(worksheet)
 
     for record in records:
         machine = record["machine"]
