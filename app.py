@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo
 
 import streamlit as st
 from openpyxl import load_workbook
-from openpyxl.styles import Alignment, Border, Side
+from openpyxl.styles import Alignment, Border, Side, Font
 
 
 # ==================================================
@@ -427,6 +427,124 @@ def write_multiline_cell(worksheet, cell_address, value):
 
 
 def force_right_border(worksheet, cell_address, style="medium"):
+def draw_approval_box(worksheet):
+    """
+    결재칸이 openpyxl 저장 과정에서 사라지는 것을 막기 위해
+    H4:K5 영역에 결재칸을 다시 그린다.
+    """
+
+    # 기존 병합이 없으면 H4:H5 병합
+    merged_ranges = [str(rng) for rng in worksheet.merged_cells.ranges]
+
+    if "H4:H5" not in merged_ranges:
+        worksheet.merge_cells("H4:H5")
+
+    # 결재칸 글자 입력
+    worksheet["H4"] = "결\n재"
+    worksheet["I4"] = "담 당"
+    worksheet["J4"] = "검 토"
+    worksheet["K4"] = "결 재"
+
+    worksheet["I5"] = ""
+    worksheet["J5"] = ""
+    worksheet["K5"] = ""
+
+    # 선 스타일
+    medium_side = Side(style="medium", color="000000")
+    thin_side = Side(style="thin", color="000000")
+
+    # 정렬
+    center_alignment = Alignment(
+        horizontal="center",
+        vertical="center",
+        wrap_text=True,
+    )
+
+    # 글꼴
+    header_font = Font(
+        name="맑은 고딕",
+        size=9,
+        bold=True,
+    )
+
+    normal_font = Font(
+        name="맑은 고딕",
+        size=9,
+        bold=False,
+    )
+
+    # 셀별 테두리
+    border_map = {
+        "H4": Border(
+            left=medium_side,
+            right=thin_side,
+            top=medium_side,
+            bottom=medium_side,
+        ),
+        "H5": Border(
+            left=medium_side,
+            right=thin_side,
+            top=medium_side,
+            bottom=medium_side,
+        ),
+        "I4": Border(
+            left=thin_side,
+            right=thin_side,
+            top=medium_side,
+            bottom=thin_side,
+        ),
+        "J4": Border(
+            left=thin_side,
+            right=thin_side,
+            top=medium_side,
+            bottom=thin_side,
+        ),
+        "K4": Border(
+            left=thin_side,
+            right=medium_side,
+            top=medium_side,
+            bottom=thin_side,
+        ),
+        "I5": Border(
+            left=thin_side,
+            right=thin_side,
+            top=thin_side,
+            bottom=medium_side,
+        ),
+        "J5": Border(
+            left=thin_side,
+            right=thin_side,
+            top=thin_side,
+            bottom=medium_side,
+        ),
+        "K5": Border(
+            left=thin_side,
+            right=medium_side,
+            top=thin_side,
+            bottom=medium_side,
+        ),
+    }
+
+    # 서식 적용
+    for cell_address, border in border_map.items():
+        cell = worksheet[cell_address]
+        cell.border = border
+        cell.alignment = center_alignment
+
+        if cell_address in ["H4", "I4", "J4", "K4"]:
+            cell.font = header_font
+        else:
+            cell.font = normal_font
+
+    # 행 높이 보정
+    worksheet.row_dimensions[4].height = 24
+    worksheet.row_dimensions[5].height = 24
+
+    # 열 너비 보정
+    worksheet.column_dimensions["H"].width = 7
+    worksheet.column_dimensions["I"].width = 8
+    worksheet.column_dimensions["J"].width = 8
+    worksheet.column_dimensions["K"].width = 8
     """
     특정 셀의 오른쪽 테두리를 강제로 다시 그린다.
     증기 압력칸 우측 테두리 깨짐 방지용.
@@ -482,7 +600,8 @@ def make_template_excel(selected_date):
         f"{selected_date.day}일 "
         f"{weekday}요일"
     )
-
+# 결재칸 복구
+draw_approval_box(worksheet)
     for record in records:
         machine = record["machine"]
 
