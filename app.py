@@ -15,8 +15,6 @@ from openpyxl.styles import Alignment, Border, Side, Font
 # ==================================================
 
 DB_PATH = "steamer.db"
-
-# GitHub 저장소에 이 이름으로 올려야 함
 TEMPLATE_PATH = "steamer_template.xlsx"
 
 KST = ZoneInfo("Asia/Seoul")
@@ -27,13 +25,8 @@ MACHINES = [
     "51", "52", "53", "54",
 ]
 
-# 11호기, 51호기는 입구/중앙/출구 칸에
-# 첫째 줄: 유량
-# 둘째 줄: 압력
-# 형태로 입력
 FLOW_PRESSURE_MACHINES = ["11", "51"]
 
-# 호기별 Excel 입력 행
 MACHINE_ROW_MAP = {
     "11": 8,
     "12": 9,
@@ -211,23 +204,23 @@ def save_or_update_record(record):
               AND machine = ?
             """,
             (
-                record[1],    # 점검 시간
-                record[3],    # 제품명
-                record[4],    # 열교환기 온도
-                record[5],    # 유탕온도 설정
-                record[6],    # 유탕온도 현재
-                record[7],    # 증기 사용량
-                record[8],    # C/T수
-                record[9],    # 입구 유량
-                record[10],   # 입구 압력
-                record[11],   # 중앙 유량
-                record[12],   # 중앙 압력
-                record[13],   # 출구 유량
-                record[14],   # 출구 압력
-                record[15],   # 비고
-                record[17],   # 수정 시각
-                record[0],    # 날짜
-                record[2],    # 호기
+                record[1],
+                record[3],
+                record[4],
+                record[5],
+                record[6],
+                record[7],
+                record[8],
+                record[9],
+                record[10],
+                record[11],
+                record[12],
+                record[13],
+                record[14],
+                record[15],
+                record[17],
+                record[0],
+                record[2],
             ),
         )
 
@@ -427,19 +420,44 @@ def write_multiline_cell(worksheet, cell_address, value):
 
 
 def force_right_border(worksheet, cell_address, style="medium"):
+    """
+    특정 셀의 오른쪽 테두리를 강제로 다시 그린다.
+    증기 압력칸 우측 테두리 깨짐 방지용.
+    """
+
+    cell = worksheet[cell_address]
+    old_border = copy(cell.border)
+
+    cell.border = Border(
+        left=old_border.left,
+        right=Side(style=style, color="000000"),
+        top=old_border.top,
+        bottom=old_border.bottom,
+        diagonal=old_border.diagonal,
+        diagonal_direction=old_border.diagonal_direction,
+        diagonalUp=old_border.diagonalUp,
+        diagonalDown=old_border.diagonalDown,
+        outline=old_border.outline,
+    )
+
+
 def draw_approval_box(worksheet):
     """
     결재칸이 openpyxl 저장 과정에서 사라지는 것을 막기 위해
     H4:K5 영역에 결재칸을 다시 그린다.
+
+    H4:H5 = 결재
+    I4 = 담당
+    J4 = 검토
+    K4 = 결재
+    I5:K5 = 서명칸
     """
 
-    # 기존 병합이 없으면 H4:H5 병합
     merged_ranges = [str(rng) for rng in worksheet.merged_cells.ranges]
 
     if "H4:H5" not in merged_ranges:
         worksheet.merge_cells("H4:H5")
 
-    # 결재칸 글자 입력
     worksheet["H4"] = "결\n재"
     worksheet["I4"] = "담 당"
     worksheet["J4"] = "검 토"
@@ -449,18 +467,15 @@ def draw_approval_box(worksheet):
     worksheet["J5"] = ""
     worksheet["K5"] = ""
 
-    # 선 스타일
     medium_side = Side(style="medium", color="000000")
     thin_side = Side(style="thin", color="000000")
 
-    # 정렬
     center_alignment = Alignment(
         horizontal="center",
         vertical="center",
         wrap_text=True,
     )
 
-    # 글꼴
     header_font = Font(
         name="맑은 고딕",
         size=9,
@@ -473,7 +488,6 @@ def draw_approval_box(worksheet):
         bold=False,
     )
 
-    # 셀별 테두리
     border_map = {
         "H4": Border(
             left=medium_side,
@@ -525,7 +539,6 @@ def draw_approval_box(worksheet):
         ),
     }
 
-    # 서식 적용
     for cell_address, border in border_map.items():
         cell = worksheet[cell_address]
         cell.border = border
@@ -536,34 +549,13 @@ def draw_approval_box(worksheet):
         else:
             cell.font = normal_font
 
-    # 행 높이 보정
     worksheet.row_dimensions[4].height = 24
     worksheet.row_dimensions[5].height = 24
 
-    # 열 너비 보정
     worksheet.column_dimensions["H"].width = 7
     worksheet.column_dimensions["I"].width = 8
     worksheet.column_dimensions["J"].width = 8
     worksheet.column_dimensions["K"].width = 8
-    """
-    특정 셀의 오른쪽 테두리를 강제로 다시 그린다.
-    증기 압력칸 우측 테두리 깨짐 방지용.
-    """
-
-    cell = worksheet[cell_address]
-    old_border = copy(cell.border)
-
-    cell.border = Border(
-        left=old_border.left,
-        right=Side(style=style, color="000000"),
-        top=old_border.top,
-        bottom=old_border.bottom,
-        diagonal=old_border.diagonal,
-        diagonal_direction=old_border.diagonal_direction,
-        diagonalUp=old_border.diagonalUp,
-        diagonalDown=old_border.diagonalDown,
-        outline=old_border.outline,
-    )
 
 
 # ==================================================
@@ -593,15 +585,16 @@ def make_template_excel(selected_date):
 
     weekday = weekday_names[selected_date.weekday()]
 
-    # 날짜 입력 셀
     worksheet["A5"] = (
         f"{selected_date.year}년 "
         f"{selected_date.month}월 "
         f"{selected_date.day}일 "
         f"{weekday}요일"
     )
-# 결재칸 복구
-draw_approval_box(worksheet)
+
+    # 결재칸 복구
+    draw_approval_box(worksheet)
+
     for record in records:
         machine = record["machine"]
 
@@ -646,12 +639,7 @@ draw_approval_box(worksheet)
                 ),
             )
 
-            # K열 오른쪽 테두리 강제 복구
-            # 선이 너무 굵으면 "medium"을 "thin"으로 바꿔봐.
             force_right_border(worksheet, f"K{row}", style="medium")
-
-            # 행 높이는 원본 양식에서 미리 조정하는 게 안정적
-            # worksheet.row_dimensions[row].height = 30
 
         else:
             worksheet[f"I{row}"] = record["inlet_pressure"]
@@ -661,20 +649,6 @@ draw_approval_box(worksheet)
     # 비고는 결재칸/하단 양식과 겹칠 수 있어서
     # 현재 Excel에는 입력하지 않는다.
     # 앱 저장 기록에는 비고가 정상 저장된다.
-    #
-    # memo_lines = []
-    #
-    # for record in records:
-    #     machine = record["machine"]
-    #     memo = record["memo"]
-    #
-    #     if memo is not None and memo.strip() != "":
-    #         memo_lines.append(
-    #             f"{machine}호기: {memo.strip()}"
-    #         )
-    #
-    # if memo_lines:
-    #     worksheet["A21"] = "\n".join(memo_lines)
 
     output = BytesIO()
     workbook.save(output)
