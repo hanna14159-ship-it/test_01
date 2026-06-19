@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo
 
 import streamlit as st
 from openpyxl import load_workbook
-from openpyxl.styles import Alignment
+from openpyxl.styles import Alignment, Border, Side
 
 
 # ==================================================
@@ -395,14 +395,26 @@ def make_flow_pressure_text(flow, pressure):
 
 def write_multiline_cell(worksheet, cell_address, value):
     """
-    셀에 줄바꿈 값을 넣고 자동 줄바꿈을 켠다.
-    기존 정렬 정보는 최대한 유지한다.
+    셀 기존 서식은 최대한 유지하고,
+    값만 두 줄로 입력한다.
     """
 
     cell = worksheet[cell_address]
+
+    old_font = copy(cell.font)
+    old_fill = copy(cell.fill)
+    old_border = copy(cell.border)
+    old_alignment = copy(cell.alignment)
+    old_number_format = cell.number_format
+    old_protection = copy(cell.protection)
+
     cell.value = value
 
-    old_alignment = copy(cell.alignment)
+    cell.font = old_font
+    cell.fill = old_fill
+    cell.border = old_border
+    cell.number_format = old_number_format
+    cell.protection = old_protection
 
     cell.alignment = Alignment(
         horizontal=old_alignment.horizontal,
@@ -411,6 +423,28 @@ def write_multiline_cell(worksheet, cell_address, value):
         wrap_text=True,
         shrink_to_fit=old_alignment.shrink_to_fit,
         indent=old_alignment.indent,
+    )
+
+
+def force_right_border(worksheet, cell_address, style="medium"):
+    """
+    특정 셀의 오른쪽 테두리를 강제로 다시 그린다.
+    증기 압력칸 우측 테두리 깨짐 방지용.
+    """
+
+    cell = worksheet[cell_address]
+    old_border = copy(cell.border)
+
+    cell.border = Border(
+        left=old_border.left,
+        right=Side(style=style, color="000000"),
+        top=old_border.top,
+        bottom=old_border.bottom,
+        diagonal=old_border.diagonal,
+        diagonal_direction=old_border.diagonal_direction,
+        diagonalUp=old_border.diagonalUp,
+        diagonalDown=old_border.diagonalDown,
+        outline=old_border.outline,
     )
 
 
@@ -493,28 +527,35 @@ def make_template_excel(selected_date):
                 ),
             )
 
-            # 두 줄이 보이도록 행 높이 조정
-            worksheet.row_dimensions[row].height = 30
+            # K열 오른쪽 테두리 강제 복구
+            # 선이 너무 굵으면 "medium"을 "thin"으로 바꿔봐.
+            force_right_border(worksheet, f"K{row}", style="medium")
+
+            # 행 높이는 원본 양식에서 미리 조정하는 게 안정적
+            # worksheet.row_dimensions[row].height = 30
 
         else:
             worksheet[f"I{row}"] = record["inlet_pressure"]
             worksheet[f"J{row}"] = record["middle_pressure"]
             worksheet[f"K{row}"] = record["outlet_pressure"]
 
-    memo_lines = []
-
-    for record in records:
-        machine = record["machine"]
-        memo = record["memo"]
-
-        if memo is not None and memo.strip() != "":
-            memo_lines.append(
-                f"{machine}호기: {memo.strip()}"
-            )
-
-    # 비고 입력 셀
-    if memo_lines:
-        worksheet["A21"] = "\n".join(memo_lines)
+    # 비고는 결재칸/하단 양식과 겹칠 수 있어서
+    # 현재 Excel에는 입력하지 않는다.
+    # 앱 저장 기록에는 비고가 정상 저장된다.
+    #
+    # memo_lines = []
+    #
+    # for record in records:
+    #     machine = record["machine"]
+    #     memo = record["memo"]
+    #
+    #     if memo is not None and memo.strip() != "":
+    #         memo_lines.append(
+    #             f"{machine}호기: {memo.strip()}"
+    #         )
+    #
+    # if memo_lines:
+    #     worksheet["A21"] = "\n".join(memo_lines)
 
     output = BytesIO()
     workbook.save(output)
