@@ -5,7 +5,8 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import streamlit as st
-from openpyxl import load_workbook
+from xlrd import open_workbook
+from xlutils.copy import copy as copy_workbook
 
 
 # ==================================================
@@ -13,7 +14,7 @@ from openpyxl import load_workbook
 # ==================================================
 
 DB_PATH = "steamer.db"
-TEMPLATE_PATH = "steamer_template.xlsx"
+TEMPLATE_PATH = "steamer_template.xls"
 
 KST = ZoneInfo("Asia/Seoul")
 
@@ -284,16 +285,31 @@ def get_machine_from_url():
 # ==================================================
 
 def make_template_excel(selected_date):
+    """
+    기존 .xls 양식을 열어서
+    선택 날짜의 점검 기록을 지정된 셀에 입력한다.
+    """
+
     if not Path(TEMPLATE_PATH).exists():
         raise FileNotFoundError(
             f"{TEMPLATE_PATH} 파일을 찾을 수 없습니다. "
-            "GitHub 저장소에 steamer_template.xlsx 파일을 올렸는지 확인하세요."
+            "GitHub 저장소에 steamer_template.xls 파일을 올렸는지 확인하세요."
         )
 
     records = load_records(selected_date)
 
-    workbook = load_workbook(TEMPLATE_PATH)
-    worksheet = workbook.active
+    # 기존 .xls 파일 열기
+    # formatting_info=True는 기존 서식을 최대한 유지하기 위한 옵션
+    read_workbook = open_workbook(
+        TEMPLATE_PATH,
+        formatting_info=True,
+    )
+
+    # 읽기 전용 xls를 쓰기 가능한 workbook으로 복사
+    workbook = copy_workbook(read_workbook)
+
+    # 첫 번째 시트 선택
+    worksheet = workbook.get_sheet(0)
 
     weekday_names = [
         "월", "화", "수", "목", "금", "토", "일"
@@ -301,11 +317,17 @@ def make_template_excel(selected_date):
 
     weekday = weekday_names[selected_date.weekday()]
 
-    worksheet["A5"] = (
-        f"{selected_date.year}년 "
-        f"{selected_date.month}월 "
-        f"{selected_date.day}일 "
-        f"{weekday}요일"
+    # xlwt는 행/열 번호를 0부터 센다.
+    # Excel A5 = row 4, col 0
+    worksheet.write(
+        4,
+        0,
+        (
+            f"{selected_date.year}년 "
+            f"{selected_date.month}월 "
+            f"{selected_date.day}일 "
+            f"{weekday}요일"
+        ),
     )
 
     for record in records:
@@ -314,19 +336,20 @@ def make_template_excel(selected_date):
         if machine not in MACHINE_ROW_MAP:
             continue
 
-        row = MACHINE_ROW_MAP[machine]
+        # Excel 8행이면 xlwt에서는 row index 7
+        row = MACHINE_ROW_MAP[machine] - 1
 
-        worksheet[f"B{row}"] = record["check_time"]
-        worksheet[f"C{row}"] = record["product"]
-
-        worksheet[f"D{row}"] = record["heat_temp"]
-        worksheet[f"E{row}"] = record["oil_set_temp"]
-        worksheet[f"F{row}"] = record["oil_now_temp"]
-        worksheet[f"G{row}"] = record["steam_usage"]
-        worksheet[f"H{row}"] = record["ct_water"]
-        worksheet[f"I{row}"] = record["inlet_pressure"]
-        worksheet[f"J{row}"] = record["middle_pressure"]
-        worksheet[f"K{row}"] = record["outlet_pressure"]
+        # Excel B열 = col 1
+        worksheet.write(row, 1, record["check_time"])          # B열 점검시간
+        worksheet.write(row, 2, record["product"])             # C열 제품명
+        worksheet.write(row, 3, record["heat_temp"])           # D열 열교환기 온도
+        worksheet.write(row, 4, record["oil_set_temp"])        # E열 유탕온도 설정
+        worksheet.write(row, 5, record["oil_now_temp"])        # F열 유탕온도 현재
+        worksheet.write(row, 6, record["steam_usage"])         # G열 증기 사용량
+        worksheet.write(row, 7, record["ct_water"])            # H열 C/T수
+        worksheet.write(row, 8, record["inlet_pressure"])      # I열 입구 압력
+        worksheet.write(row, 9, record["middle_pressure"])     # J열 중간 압력
+        worksheet.write(row, 10, record["outlet_pressure"])    # K열 출구 압력
 
     memo_lines = []
 
@@ -339,11 +362,19 @@ def make_template_excel(selected_date):
                 f"{machine}호기: {memo.strip()}"
             )
 
+    # Excel A21 = row 20, col 0
     if memo_lines:
-        worksheet["A21"] = "\n".join(memo_lines)
+        worksheet.write(
+            20,
+            0,
+            "\n".join(memo_lines),
+        )
 
     output = BytesIO()
+
+    # .xls 파일을 메모리에 저장
     workbook.save(output)
+
     output.seek(0)
 
     return output.getvalue(), len(records)
@@ -715,7 +746,7 @@ with tab_excel:
 
             file_name = (
                 f"증숙기_점검일지_"
-                f"{excel_date.isoformat()}.xlsx"
+                f"{excel_date.isoformat()}.xls"
             )
 
             st.write(
@@ -727,10 +758,7 @@ with tab_excel:
                 label="기존 양식 Excel 다운로드",
                 data=excel_file,
                 file_name=file_name,
-                mime=(
-                    "application/vnd.openxmlformats-"
-                    "officedocument.spreadsheetml.sheet"
-                ),
+                mime="application/vnd.ms-excel",
                 use_container_width=True,
             )
 
