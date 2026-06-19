@@ -8,7 +8,6 @@ from zoneinfo import ZoneInfo
 import streamlit as st
 from openpyxl import load_workbook
 from openpyxl.styles import Alignment
-from openpyxl.drawing.image import Image
 
 
 # ==================================================
@@ -17,7 +16,6 @@ from openpyxl.drawing.image import Image
 
 DB_PATH = "steamer.db"
 TEMPLATE_PATH = "steamer_template.xlsx"
-APPROVAL_IMAGE_PATH = "approval_box.png"
 
 KST = ZoneInfo("Asia/Seoul")
 
@@ -33,20 +31,20 @@ MACHINES = [
 # 둘째 줄: 압력
 FLOW_PRESSURE_MACHINES = ["11", "51"]
 
-# 호기별 Excel 입력 행
+# 업로드한 steamer_template.xlsx 기준 실제 입력 행
 MACHINE_ROW_MAP = {
-    "11": 8,
-    "12": 9,
-    "13": 10,
-    "14": 11,
-    "21": 12,
-    "22": 13,
-    "23": 14,
-    "24": 15,
-    "51": 16,
-    "52": 17,
-    "53": 18,
-    "54": 19,
+    "11": 11,
+    "12": 12,
+    "13": 13,
+    "14": 14,
+    "21": 15,
+    "22": 16,
+    "23": 17,
+    "24": 18,
+    "51": 19,
+    "52": 20,
+    "53": 21,
+    "54": 22,
 }
 
 
@@ -108,9 +106,20 @@ def create_table():
         ]
 
         new_columns = {
+            "product": "TEXT",
+            "heat_temp": "REAL",
+            "oil_set_temp": "REAL",
+            "oil_now_temp": "REAL",
+            "steam_usage": "REAL",
+            "ct_water": "REAL",
             "inlet_flow": "REAL",
+            "inlet_pressure": "REAL",
             "middle_flow": "REAL",
+            "middle_pressure": "REAL",
             "outlet_flow": "REAL",
+            "outlet_pressure": "REAL",
+            "memo": "TEXT",
+            "created_at": "TEXT",
             "updated_at": "TEXT",
         }
 
@@ -122,6 +131,16 @@ def create_table():
                 )
 
         now_text = datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S")
+
+        conn.execute(
+            """
+            UPDATE steamer_logs
+            SET created_at = ?
+            WHERE created_at IS NULL
+               OR created_at = ''
+            """,
+            (now_text,),
+        )
 
         conn.execute(
             """
@@ -268,7 +287,7 @@ def load_records(selected_date):
             updated_at
         FROM steamer_logs
         WHERE check_date = ?
-        ORDER BY machine ASC
+        ORDER BY CAST(machine AS INTEGER) ASC
         """,
         (date_text,),
     ).fetchall()
@@ -337,6 +356,9 @@ def format_number(value):
     if value is None:
         return ""
 
+    if isinstance(value, float):
+        return f"{value:.5f}".rstrip("0").rstrip(".")
+
     return str(value)
 
 
@@ -376,6 +398,33 @@ def get_machine_from_url():
 # 5. Excel 보조 함수
 # ==================================================
 
+def get_writable_cell_address(worksheet, cell_address):
+    """
+    병합셀인 경우 실제로 값을 쓸 수 있는 왼쪽 위 셀 주소를 반환한다.
+    병합셀이 아니면 원래 셀 주소를 그대로 반환한다.
+    """
+
+    for merged_range in worksheet.merged_cells.ranges:
+        if cell_address in merged_range:
+            return merged_range.start_cell.coordinate
+
+    return cell_address
+
+
+def write_cell_value(worksheet, cell_address, value):
+    """
+    병합셀 오류를 방지하면서 값을 입력한다.
+    병합된 셀 안쪽이면 병합 범위의 왼쪽 위 셀에 값을 넣는다.
+    """
+
+    writable_cell_address = get_writable_cell_address(
+        worksheet,
+        cell_address,
+    )
+
+    worksheet[writable_cell_address] = value
+
+
 def make_flow_pressure_text(flow, pressure):
     """
     유량과 압력을 한 셀에 두 줄로 넣는다.
@@ -395,13 +444,16 @@ def make_flow_pressure_text(flow, pressure):
 
 def write_multiline_cell(worksheet, cell_address, value):
     """
-    원본 셀 서식은 건드리지 않고 값만 넣는다.
-    줄바꿈 표시를 위해 wrap_text만 기존 정렬 기반으로 켠다.
-
-    테두리, 결재칸, 행높이, 열너비는 건드리지 않는다.
+    병합셀 오류를 방지하면서 두 줄 값을 입력한다.
+    원본 테두리, 행높이, 열너비는 건드리지 않는다.
     """
 
-    cell = worksheet[cell_address]
+    writable_cell_address = get_writable_cell_address(
+        worksheet,
+        cell_address,
+    )
+
+    cell = worksheet[writable_cell_address]
     cell.value = value
 
     old_alignment = copy(cell.alignment)
@@ -416,42 +468,16 @@ def write_multiline_cell(worksheet, cell_address, value):
     )
 
 
-def insert_approval_image(worksheet):
-    """
-    결재칸 PNG 이미지를 Excel에 삽입한다.
-
-    GitHub 저장소에 approval_box.png 파일이 있어야 한다.
-    위치와 크기는 아래 width, height, anchor 값으로 조절한다.
-    """
-
-    if not Path(APPROVAL_IMAGE_PATH).exists():
-        return
-
-    approval_image = Image(APPROVAL_IMAGE_PATH)
-
-    # 결재칸 그림 크기
-    # 안 맞으면 이 숫자만 조절하면 됨
-    approval_image.width = 220
-    approval_image.height = 60
-
-    # 결재칸 위치
-    # 오른쪽으로 옮기려면 I4, 아래로 내리려면 H5 식으로 조절
-    approval_image.anchor = "H4"
-
-    worksheet.add_image(approval_image)
-
-
 # ==================================================
 # 6. Excel 생성 함수
 # ==================================================
 
 def make_template_excel(selected_date):
     """
-    기존 .xlsx 원본 양식을 그대로 열어서
+    업로드한 steamer_template.xlsx 원본 양식을 그대로 열어서
     값만 지정된 셀에 입력한다.
 
-    결재칸은 approval_box.png를 삽입한다.
-    테두리, 행높이, 열너비, 병합셀은 건드리지 않는다.
+    결재칸, 테두리, 행높이, 열너비, 병합셀은 건드리지 않는다.
     """
 
     if not Path(TEMPLATE_PATH).exists():
@@ -471,16 +497,17 @@ def make_template_excel(selected_date):
 
     weekday = weekday_names[selected_date.weekday()]
 
-    # 날짜 값만 입력
-    worksheet["A5"] = (
-        f"{selected_date.year}년 "
-        f"{selected_date.month}월 "
-        f"{selected_date.day}일 "
-        f"{weekday}요일"
+    # 실제 원본 기준 날짜 입력 위치: A6:D8 병합셀
+    write_cell_value(
+        worksheet,
+        "A6",
+        (
+            f"  {selected_date.year} 년       "
+            f"{selected_date.month} 월       "
+            f"{selected_date.day} 일       "
+            f"{weekday}요일"
+        ),
     )
-
-    # 결재칸 PNG 삽입
-    insert_approval_image(worksheet)
 
     for record in records:
         machine = record["machine"]
@@ -490,19 +517,30 @@ def make_template_excel(selected_date):
 
         row = MACHINE_ROW_MAP[machine]
 
-        # 값만 입력. 원본 셀 서식은 유지.
-        worksheet[f"B{row}"] = record["check_time"]
-        worksheet[f"C{row}"] = record["product"]
-        worksheet[f"D{row}"] = record["heat_temp"]
-        worksheet[f"E{row}"] = record["oil_set_temp"]
-        worksheet[f"F{row}"] = record["oil_now_temp"]
-        worksheet[f"G{row}"] = record["steam_usage"]
-        worksheet[f"H{row}"] = record["ct_water"]
+        # 실제 원본 기준 입력 좌표
+        # B: 점검시간
+        # C: 제품명
+        # D: 열교환기 온도
+        # E: 유탕온도 설정
+        # F: 유탕온도 현재
+        # G: 증기 사용량
+        # H:J: C/T수
+        # K:L: 입구
+        # M:N: 중앙
+        # O: 출구
+
+        write_cell_value(worksheet, f"B{row}", record["check_time"])
+        write_cell_value(worksheet, f"C{row}", record["product"])
+        write_cell_value(worksheet, f"D{row}", record["heat_temp"])
+        write_cell_value(worksheet, f"E{row}", record["oil_set_temp"])
+        write_cell_value(worksheet, f"F{row}", record["oil_now_temp"])
+        write_cell_value(worksheet, f"G{row}", record["steam_usage"])
+        write_cell_value(worksheet, f"H{row}", record["ct_water"])
 
         if machine in FLOW_PRESSURE_MACHINES:
             write_multiline_cell(
                 worksheet,
-                f"I{row}",
+                f"K{row}",
                 make_flow_pressure_text(
                     record["inlet_flow"],
                     record["inlet_pressure"],
@@ -511,7 +549,7 @@ def make_template_excel(selected_date):
 
             write_multiline_cell(
                 worksheet,
-                f"J{row}",
+                f"M{row}",
                 make_flow_pressure_text(
                     record["middle_flow"],
                     record["middle_pressure"],
@@ -520,7 +558,7 @@ def make_template_excel(selected_date):
 
             write_multiline_cell(
                 worksheet,
-                f"K{row}",
+                f"O{row}",
                 make_flow_pressure_text(
                     record["outlet_flow"],
                     record["outlet_pressure"],
@@ -528,11 +566,25 @@ def make_template_excel(selected_date):
             )
 
         else:
-            worksheet[f"I{row}"] = record["inlet_pressure"]
-            worksheet[f"J{row}"] = record["middle_pressure"]
-            worksheet[f"K{row}"] = record["outlet_pressure"]
+            write_cell_value(
+                worksheet,
+                f"K{row}",
+                record["inlet_pressure"],
+            )
 
-    # 비고도 일단 엑셀에는 입력하지 않음.
+            write_cell_value(
+                worksheet,
+                f"M{row}",
+                record["middle_pressure"],
+            )
+
+            write_cell_value(
+                worksheet,
+                f"O{row}",
+                record["outlet_pressure"],
+            )
+
+    # 비고는 현재 Excel에는 입력하지 않음.
     # 원본 하단 양식 보호 목적.
     # 앱 저장 기록에는 비고가 그대로 저장됨.
 
