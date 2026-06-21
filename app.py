@@ -8,11 +8,6 @@ from zoneinfo import ZoneInfo
 import streamlit as st
 from openpyxl import load_workbook
 from openpyxl.styles import Alignment
-from openpyxl.drawing.image import Image
-from openpyxl.drawing.spreadsheet_drawing import AnchorMarker, OneCellAnchor
-from openpyxl.drawing.xdr import XDRPositiveSize2D
-from openpyxl.utils import get_column_letter, column_index_from_string
-from openpyxl.utils.units import pixels_to_EMU
 
 
 # ==================================================
@@ -21,7 +16,6 @@ from openpyxl.utils.units import pixels_to_EMU
 
 DB_PATH = "steamer.db"
 TEMPLATE_PATH = "steamer_template.xlsx"
-APPROVAL_IMAGE_PATH = "approval_box.png"
 
 KST = ZoneInfo("Asia/Seoul")
 
@@ -32,12 +26,12 @@ MACHINES = [
 ]
 
 # 11호기, 51호기만
-# 증기 입구/중앙/출구 칸에
+# 입구/중간/출구 칸에
 # 첫째 줄: 유량
 # 둘째 줄: 압력
 FLOW_PRESSURE_MACHINES = ["11", "51"]
 
-# 현재 steamer_template.xlsx 기준 입력 행
+# 방금 올린 steamer_template.xlsx 기준 실제 입력 행
 MACHINE_ROW_MAP = {
     "11": 11,
     "12": 12,
@@ -63,11 +57,6 @@ def connect_db():
 
 
 def create_table():
-    """
-    점검 기록 테이블 생성.
-    기존 DB에 새 칼럼이 없으면 자동 추가.
-    """
-
     with connect_db() as conn:
         conn.execute(
             """
@@ -96,8 +85,8 @@ def create_table():
 
                 memo TEXT,
 
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
+                created_at TEXT,
+                updated_at TEXT,
 
                 UNIQUE(check_date, machine)
             )
@@ -160,11 +149,6 @@ def create_table():
 
 
 def save_or_update_record(record):
-    """
-    같은 날짜 + 같은 호기 기록이 없으면 새로 저장.
-    이미 있으면 기존 기록 수정.
-    """
-
     check_date = record[0]
     machine = record[2]
 
@@ -236,23 +220,23 @@ def save_or_update_record(record):
               AND machine = ?
             """,
             (
-                record[1],    # 점검 시간
-                record[3],    # 제품명
-                record[4],    # 열교환기 온도
-                record[5],    # 유탕온도 설정
-                record[6],    # 유탕온도 현재
-                record[7],    # 증기 사용량
-                record[8],    # C/T수
-                record[9],    # 입구 유량
-                record[10],   # 입구 압력
-                record[11],   # 중앙 유량
-                record[12],   # 중앙 압력
-                record[13],   # 출구 유량
-                record[14],   # 출구 압력
-                record[15],   # 비고
-                record[17],   # 수정 시각
-                record[0],    # 날짜
-                record[2],    # 호기
+                record[1],    # check_time
+                record[3],    # product
+                record[4],    # heat_temp
+                record[5],    # oil_set_temp
+                record[6],    # oil_now_temp
+                record[7],    # steam_usage
+                record[8],    # ct_water
+                record[9],    # inlet_flow
+                record[10],   # inlet_pressure
+                record[11],   # middle_flow
+                record[12],   # middle_pressure
+                record[13],   # outlet_flow
+                record[14],   # outlet_pressure
+                record[15],   # memo
+                record[17],   # updated_at
+                record[0],    # check_date
+                record[2],    # machine
             ),
         )
 
@@ -260,10 +244,6 @@ def save_or_update_record(record):
 
 
 def load_records(selected_date):
-    """
-    선택한 날짜의 점검 기록을 불러온다.
-    """
-
     date_text = selected_date.isoformat()
 
     conn = connect_db()
@@ -304,10 +284,6 @@ def load_records(selected_date):
 
 
 def delete_record(record_id):
-    """
-    id 기준으로 점검 기록 한 건 삭제.
-    """
-
     with connect_db() as conn:
         cursor = conn.execute(
             """
@@ -325,13 +301,6 @@ def delete_record(record_id):
 # ==================================================
 
 def parse_number(value, label):
-    """
-    문자 입력값을 숫자로 변환한다.
-
-    빈칸은 None으로 저장.
-    소수점 아래 5자리까지 허용.
-    """
-
     value = value.strip()
 
     if value == "":
@@ -354,11 +323,6 @@ def parse_number(value, label):
 
 
 def format_number(value):
-    """
-    Excel 한 칸 안에 들어갈 숫자를 보기 좋게 변환.
-    None이면 빈칸.
-    """
-
     if value is None:
         return ""
 
@@ -369,10 +333,6 @@ def format_number(value):
 
 
 def number_text_input(label, key):
-    """
-    + / - 버튼 없는 숫자 입력칸.
-    """
-
     return st.text_input(
         label,
         key=key,
@@ -385,13 +345,6 @@ def number_text_input(label, key):
 # ==================================================
 
 def get_machine_from_url():
-    """
-    URL의 machine 값을 읽는다.
-
-    예:
-    ?machine=11
-    """
-
     machine = st.query_params.get("machine")
 
     if machine in MACHINES:
@@ -406,8 +359,8 @@ def get_machine_from_url():
 
 def get_writable_cell_address(worksheet, cell_address):
     """
-    병합셀인 경우 실제로 값을 쓸 수 있는 왼쪽 위 셀 주소를 반환한다.
-    병합셀이 아니면 원래 셀 주소를 그대로 반환한다.
+    병합셀 안쪽 좌표가 들어오면
+    실제로 값을 쓸 수 있는 병합 범위의 왼쪽 위 셀을 반환.
     """
 
     for merged_range in worksheet.merged_cells.ranges:
@@ -419,8 +372,7 @@ def get_writable_cell_address(worksheet, cell_address):
 
 def write_cell_value(worksheet, cell_address, value):
     """
-    병합셀 오류를 방지하면서 값을 입력한다.
-    병합된 셀 안쪽이면 병합 범위의 왼쪽 위 셀에 값을 넣는다.
+    병합셀 오류 방지용 값 입력 함수.
     """
 
     writable_cell_address = get_writable_cell_address(
@@ -432,13 +384,6 @@ def write_cell_value(worksheet, cell_address, value):
 
 
 def make_flow_pressure_text(flow, pressure):
-    """
-    유량과 압력을 한 셀에 두 줄로 넣는다.
-
-    첫째 줄: 유량
-    둘째 줄: 압력
-    """
-
     flow_text = format_number(flow)
     pressure_text = format_number(pressure)
 
@@ -450,8 +395,8 @@ def make_flow_pressure_text(flow, pressure):
 
 def write_multiline_cell(worksheet, cell_address, value):
     """
-    병합셀 오류를 방지하면서 두 줄 값을 입력한다.
-    원본 테두리, 행높이, 열너비는 건드리지 않는다.
+    유량/압력 두 줄 입력.
+    병합셀에도 안전하게 입력.
     """
 
     writable_cell_address = get_writable_cell_address(
@@ -474,104 +419,25 @@ def write_multiline_cell(worksheet, cell_address, value):
     )
 
 
-def column_width_to_pixels(width):
-    """
-    Excel 열 너비를 대략적인 픽셀 값으로 변환.
-    """
-
-    if width is None:
-        width = 8.43
-
-    return int(width * 7 + 5)
-
-
-def find_image_start_from_top_right(worksheet, top_right_cell, image_width_px):
-    """
-    top_right_cell의 오른쪽 위 모서리를 기준으로
-    이미지의 오른쪽 위 모서리를 맞추기 위한 시작 위치 계산.
-    """
-
-    col_text = "".join([c for c in top_right_cell if c.isalpha()])
-    row_text = "".join([c for c in top_right_cell if c.isdigit()])
-
-    right_col_idx = column_index_from_string(col_text)
-    row_idx = int(row_text)
-
-    remaining_width = image_width_px
-    current_col_idx = right_col_idx
-
-    while current_col_idx >= 1:
-        col_letter = get_column_letter(current_col_idx)
-        col_width_px = column_width_to_pixels(
-            worksheet.column_dimensions[col_letter].width
-        )
-
-        if remaining_width <= col_width_px:
-            start_offset_px = col_width_px - remaining_width
-            return current_col_idx, start_offset_px, row_idx
-
-        remaining_width -= col_width_px
-        current_col_idx -= 1
-
-    return 1, 0, row_idx
-
-
-def insert_approval_image_top_right(
-    worksheet,
-    image_path,
-    top_right_cell="K5",
-    image_width_px=220,
-    image_height_px=60,
-):
-    """
-    approval_box.png를 삽입하되,
-    이미지의 오른쪽 위 모서리를
-    top_right_cell의 오른쪽 위 모서리에 맞춘다.
-    """
-
-    if not Path(image_path).exists():
-        return
-
-    start_col_idx, start_offset_px, row_idx = find_image_start_from_top_right(
-        worksheet,
-        top_right_cell,
-        image_width_px,
-    )
-
-    img = Image(image_path)
-    img.width = image_width_px
-    img.height = image_height_px
-
-    marker = AnchorMarker(
-        col=start_col_idx - 1,
-        colOff=pixels_to_EMU(start_offset_px),
-        row=row_idx - 1,
-        rowOff=0,
-    )
-
-    size = XDRPositiveSize2D(
-        cx=pixels_to_EMU(image_width_px),
-        cy=pixels_to_EMU(image_height_px),
-    )
-
-    img.anchor = OneCellAnchor(
-        _from=marker,
-        ext=size,
-    )
-
-    worksheet.add_image(img)
-
-
 # ==================================================
 # 6. Excel 생성 함수
 # ==================================================
 
 def make_template_excel(selected_date):
     """
-    steamer_template.xlsx 원본 양식을 열어서
-    값만 지정된 셀에 입력한다.
+    방금 업로드한 steamer_template.xlsx 기준 좌표.
 
-    결재칸은 approval_box.png를 K5 우측 상단 모서리 기준으로 삽입한다.
+    날짜: A6
+    점검시간: B열
+    제품명: C열
+    열교환기 온도: D열
+    유탕온도 설정: E열
+    유탕온도 현재: F열
+    증기 사용량: G열
+    C/T수: H열, 실제 병합 H:J
+    입구 압력: K열, 실제 병합 K:L
+    중간 압력: M열, 실제 병합 M:N
+    출구 압력: O열
     """
 
     if not Path(TEMPLATE_PATH).exists():
@@ -591,25 +457,16 @@ def make_template_excel(selected_date):
 
     weekday = weekday_names[selected_date.weekday()]
 
-    # 날짜 입력 위치
+    # 날짜 입력: A6:D8 병합셀
     write_cell_value(
         worksheet,
         "A6",
         (
-            f"  {selected_date.year} 년       "
-            f"{selected_date.month} 월       "
-            f"{selected_date.day} 일       "
+            f"  {selected_date.year} 년      "
+            f"{selected_date.month} 월        "
+            f"{selected_date.day} 일         "
             f"{weekday}요일"
         ),
-    )
-
-    # 결재칸 그림 삽입
-    insert_approval_image_top_right(
-        worksheet,
-        APPROVAL_IMAGE_PATH,
-        top_right_cell="K5",
-        image_width_px=220,
-        image_height_px=60,
     )
 
     for record in records:
@@ -620,20 +477,26 @@ def make_template_excel(selected_date):
 
         row = MACHINE_ROW_MAP[machine]
 
+        # 기본 수치 입력
         write_cell_value(worksheet, f"B{row}", record["check_time"])
         write_cell_value(worksheet, f"C{row}", record["product"])
         write_cell_value(worksheet, f"D{row}", record["heat_temp"])
         write_cell_value(worksheet, f"E{row}", record["oil_set_temp"])
         write_cell_value(worksheet, f"F{row}", record["oil_now_temp"])
 
-        # 증기 사용량은 값이 없으면 엑셀에 "." 입력
+        # 증기 사용량은 값이 없으면 "." 입력
         if record["steam_usage"] is None:
             write_cell_value(worksheet, f"G{row}", ".")
         else:
             write_cell_value(worksheet, f"G{row}", record["steam_usage"])
 
+        # C/T수: H:J 병합셀
         write_cell_value(worksheet, f"H{row}", record["ct_water"])
 
+        # 증기 압력 영역
+        # 입구: K:L 병합셀
+        # 중간: M:N 병합셀
+        # 출구: O열 단독
         if machine in FLOW_PRESSURE_MACHINES:
             write_multiline_cell(
                 worksheet,
@@ -680,9 +543,6 @@ def make_template_excel(selected_date):
                 f"O{row}",
                 record["outlet_pressure"],
             )
-
-    # 비고는 현재 Excel에는 입력하지 않음.
-    # 앱 저장 기록에는 비고가 그대로 저장됨.
 
     output = BytesIO()
     workbook.save(output)
@@ -785,7 +645,7 @@ with tab_input:
     )
 
     if machine in FLOW_PRESSURE_MACHINES:
-        st.markdown("#### 증기 입구 / 중앙 / 출구")
+        st.markdown("#### 증기 입구 / 중간 / 출구")
 
         inlet_flow_text = number_text_input(
             "입구 유량",
@@ -798,12 +658,12 @@ with tab_input:
         )
 
         middle_flow_text = number_text_input(
-            "중앙 유량",
+            "중간 유량",
             "middle_flow",
         )
 
         middle_pressure_text = number_text_input(
-            "중앙 압력",
+            "중간 압력",
             "middle_pressure",
         )
 
@@ -828,7 +688,7 @@ with tab_input:
         )
 
         middle_pressure_text = number_text_input(
-            "중앙 압력",
+            "중간 압력",
             "middle_pressure",
         )
 
@@ -890,12 +750,12 @@ with tab_input:
 
             middle_flow = parse_number(
                 middle_flow_text,
-                "중앙 유량",
+                "중간 유량",
             )
 
             middle_pressure = parse_number(
                 middle_pressure_text,
-                "중앙 압력",
+                "중간 압력",
             )
 
             outlet_flow = parse_number(
@@ -990,8 +850,8 @@ with tab_records:
                     "C/T수": record["ct_water"],
                     "입구유량": record["inlet_flow"],
                     "입구압력": record["inlet_pressure"],
-                    "중앙유량": record["middle_flow"],
-                    "중앙압력": record["middle_pressure"],
+                    "중간유량": record["middle_flow"],
+                    "중간압력": record["middle_pressure"],
                     "출구유량": record["outlet_flow"],
                     "출구압력": record["outlet_pressure"],
                     "비고": record["memo"],
