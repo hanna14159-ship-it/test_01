@@ -25,23 +25,26 @@ MACHINES = [
     "51", "52", "53", "54",
 ]
 
-# 11호기, 51호기만 유량 + 압력 2줄 입력
+# 11호기, 51호기만
+# 증기 입구/중앙/출구 칸에
+# 첫째 줄: 유량
+# 둘째 줄: 압력
 FLOW_PRESSURE_MACHINES = ["11", "51"]
 
-# 현재 템플릿 기준 행
+# 호기별 Excel 입력 행
 MACHINE_ROW_MAP = {
-    "11": 11,
-    "12": 12,
-    "13": 13,
-    "14": 14,
-    "21": 15,
-    "22": 16,
-    "23": 17,
-    "24": 18,
-    "51": 19,
-    "52": 20,
-    "53": 21,
-    "54": 22,
+    "11": 8,
+    "12": 9,
+    "13": 10,
+    "14": 11,
+    "21": 12,
+    "22": 13,
+    "23": 14,
+    "24": 15,
+    "51": 16,
+    "52": 17,
+    "53": 18,
+    "54": 19,
 }
 
 
@@ -54,6 +57,11 @@ def connect_db():
 
 
 def create_table():
+    """
+    점검 기록 테이블 생성.
+    기존 DB에 새 칼럼이 없으면 자동 추가.
+    """
+
     with connect_db() as conn:
         conn.execute(
             """
@@ -82,8 +90,8 @@ def create_table():
 
                 memo TEXT,
 
-                created_at TEXT,
-                updated_at TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
 
                 UNIQUE(check_date, machine)
             )
@@ -98,20 +106,9 @@ def create_table():
         ]
 
         new_columns = {
-            "product": "TEXT",
-            "heat_temp": "REAL",
-            "oil_set_temp": "REAL",
-            "oil_now_temp": "REAL",
-            "steam_usage": "REAL",
-            "ct_water": "REAL",
             "inlet_flow": "REAL",
-            "inlet_pressure": "REAL",
             "middle_flow": "REAL",
-            "middle_pressure": "REAL",
             "outlet_flow": "REAL",
-            "outlet_pressure": "REAL",
-            "memo": "TEXT",
-            "created_at": "TEXT",
             "updated_at": "TEXT",
         }
 
@@ -127,16 +124,6 @@ def create_table():
         conn.execute(
             """
             UPDATE steamer_logs
-            SET created_at = ?
-            WHERE created_at IS NULL
-               OR created_at = ''
-            """,
-            (now_text,),
-        )
-
-        conn.execute(
-            """
-            UPDATE steamer_logs
             SET updated_at = ?
             WHERE updated_at IS NULL
                OR updated_at = ''
@@ -146,6 +133,11 @@ def create_table():
 
 
 def save_or_update_record(record):
+    """
+    같은 날짜 + 같은 호기 기록이 없으면 새로 저장.
+    이미 있으면 기존 기록 수정.
+    """
+
     check_date = record[0]
     machine = record[2]
 
@@ -217,23 +209,23 @@ def save_or_update_record(record):
               AND machine = ?
             """,
             (
-                record[1],
-                record[3],
-                record[4],
-                record[5],
-                record[6],
-                record[7],
-                record[8],
-                record[9],
-                record[10],
-                record[11],
-                record[12],
-                record[13],
-                record[14],
-                record[15],
-                record[17],
-                record[0],
-                record[2],
+                record[1],    # 점검 시간
+                record[3],    # 제품명
+                record[4],    # 열교환기 온도
+                record[5],    # 유탕온도 설정
+                record[6],    # 유탕온도 현재
+                record[7],    # 증기 사용량
+                record[8],    # C/T수
+                record[9],    # 입구 유량
+                record[10],   # 입구 압력
+                record[11],   # 중앙 유량
+                record[12],   # 중앙 압력
+                record[13],   # 출구 유량
+                record[14],   # 출구 압력
+                record[15],   # 비고
+                record[17],   # 수정 시각
+                record[0],    # 날짜
+                record[2],    # 호기
             ),
         )
 
@@ -241,6 +233,10 @@ def save_or_update_record(record):
 
 
 def load_records(selected_date):
+    """
+    선택한 날짜의 점검 기록을 불러온다.
+    """
+
     date_text = selected_date.isoformat()
 
     conn = connect_db()
@@ -270,7 +266,7 @@ def load_records(selected_date):
             updated_at
         FROM steamer_logs
         WHERE check_date = ?
-        ORDER BY CAST(machine AS INTEGER) ASC
+        ORDER BY machine ASC
         """,
         (date_text,),
     ).fetchall()
@@ -281,6 +277,10 @@ def load_records(selected_date):
 
 
 def delete_record(record_id):
+    """
+    id 기준으로 점검 기록 한 건 삭제.
+    """
+
     with connect_db() as conn:
         cursor = conn.execute(
             """
@@ -298,6 +298,13 @@ def delete_record(record_id):
 # ==================================================
 
 def parse_number(value, label):
+    """
+    문자 입력값을 숫자로 변환한다.
+
+    빈칸은 None으로 저장.
+    소수점 아래 5자리까지 허용.
+    """
+
     value = value.strip()
 
     if value == "":
@@ -320,33 +327,25 @@ def parse_number(value, label):
 
 
 def format_number(value):
+    """
+    Excel 한 칸 안에 들어갈 숫자를 보기 좋게 변환.
+    None이면 빈칸.
+    """
+
     if value is None:
         return ""
-
-    if isinstance(value, float):
-        return f"{value:.5f}".rstrip("0").rstrip(".")
 
     return str(value)
 
 
-def excel_value(value, dot_if_empty=False):
-    if value is None:
-        if dot_if_empty:
-            return "."
-        return None
-
-    return value
-
-
-def number_text_input(label, key, machine):
+def number_text_input(label, key):
     """
-    호기별로 입력창 key를 분리한다.
-    예: 11_heat_temp, 12_heat_temp
+    + / - 버튼 없는 숫자 입력칸.
     """
 
     return st.text_input(
         label,
-        key=f"{machine}_{key}",
+        key=key,
         placeholder="예: 123.45",
     )
 
@@ -356,6 +355,13 @@ def number_text_input(label, key, machine):
 # ==================================================
 
 def get_machine_from_url():
+    """
+    URL의 machine 값을 읽는다.
+
+    예:
+    ?machine=11
+    """
+
     machine = st.query_params.get("machine")
 
     if machine in MACHINES:
@@ -368,33 +374,14 @@ def get_machine_from_url():
 # 5. Excel 보조 함수
 # ==================================================
 
-def get_writable_cell_address(worksheet, cell_address):
-    """
-    병합셀 내부 좌표가 들어오면 실제로 값을 쓸 수 있는
-    병합 범위의 왼쪽 위 셀 주소를 반환한다.
-    """
-
-    for merged_range in worksheet.merged_cells.ranges:
-        if cell_address in merged_range:
-            return merged_range.start_cell.coordinate
-
-    return cell_address
-
-
-def write_cell_value(worksheet, cell_address, value):
-    """
-    병합셀 오류 방지용 값 입력 함수.
-    """
-
-    writable_cell_address = get_writable_cell_address(
-        worksheet,
-        cell_address,
-    )
-
-    worksheet[writable_cell_address] = value
-
-
 def make_flow_pressure_text(flow, pressure):
+    """
+    유량과 압력을 한 셀에 두 줄로 넣는다.
+
+    첫째 줄: 유량
+    둘째 줄: 압력
+    """
+
     flow_text = format_number(flow)
     pressure_text = format_number(pressure)
 
@@ -406,16 +393,13 @@ def make_flow_pressure_text(flow, pressure):
 
 def write_multiline_cell(worksheet, cell_address, value):
     """
-    유량/압력 두 줄 입력.
-    병합셀에도 안전하게 입력.
+    원본 셀 서식은 건드리지 않고 값만 넣는다.
+    줄바꿈 표시를 위해 wrap_text만 기존 정렬 기반으로 켠다.
+
+    테두리, 결재칸, 행높이, 열너비는 건드리지 않는다.
     """
 
-    writable_cell_address = get_writable_cell_address(
-        worksheet,
-        cell_address,
-    )
-
-    cell = worksheet[writable_cell_address]
+    cell = worksheet[cell_address]
     cell.value = value
 
     old_alignment = copy(cell.alignment)
@@ -436,19 +420,10 @@ def write_multiline_cell(worksheet, cell_address, value):
 
 def make_template_excel(selected_date):
     """
-    현재 steamer_template.xlsx 기준 좌표.
+    기존 .xlsx 원본 양식을 그대로 열어서
+    값만 지정된 셀에 입력한다.
 
-    날짜: A6
-    점검시간: B열
-    제품명: C열
-    열교환기 온도: D열
-    유탕온도 설정: E열
-    유탕온도 현재: F열
-    증기 사용량: G열
-    C/T수: H열
-    입구: K열
-    중간: M열
-    출구: O열
+    테두리, 결재칸, 행높이, 열너비, 병합셀은 건드리지 않는다.
     """
 
     if not Path(TEMPLATE_PATH).exists():
@@ -460,11 +435,7 @@ def make_template_excel(selected_date):
     records = load_records(selected_date)
 
     workbook = load_workbook(TEMPLATE_PATH)
-
-    if "Sheet1" in workbook.sheetnames:
-        worksheet = workbook["Sheet1"]
-    else:
-        worksheet = workbook.worksheets[0]
+    worksheet = workbook.active
 
     weekday_names = [
         "월", "화", "수", "목", "금", "토", "일"
@@ -472,15 +443,12 @@ def make_template_excel(selected_date):
 
     weekday = weekday_names[selected_date.weekday()]
 
-    write_cell_value(
-        worksheet,
-        "A6",
-        (
-            f"  {selected_date.year} 년      "
-            f"{selected_date.month} 월        "
-            f"{selected_date.day} 일         "
-            f"{weekday}요일"
-        ),
+    # 날짜 값만 입력
+    worksheet["A5"] = (
+        f"{selected_date.year}년 "
+        f"{selected_date.month}월 "
+        f"{selected_date.day}일 "
+        f"{weekday}요일"
     )
 
     for record in records:
@@ -491,44 +459,19 @@ def make_template_excel(selected_date):
 
         row = MACHINE_ROW_MAP[machine]
 
-        write_cell_value(worksheet, f"B{row}", record["check_time"])
-        write_cell_value(worksheet, f"C{row}", record["product"])
-
-        write_cell_value(
-            worksheet,
-            f"D{row}",
-            excel_value(record["heat_temp"]),
-        )
-
-        write_cell_value(
-            worksheet,
-            f"E{row}",
-            excel_value(record["oil_set_temp"]),
-        )
-
-        write_cell_value(
-            worksheet,
-            f"F{row}",
-            excel_value(record["oil_now_temp"]),
-        )
-
-        # 증기 사용량은 값이 없으면 "." 입력
-        write_cell_value(
-            worksheet,
-            f"G{row}",
-            excel_value(record["steam_usage"], dot_if_empty=True),
-        )
-
-        write_cell_value(
-            worksheet,
-            f"H{row}",
-            excel_value(record["ct_water"]),
-        )
+        # 값만 입력. 원본 셀 서식은 유지.
+        worksheet[f"B{row}"] = record["check_time"]
+        worksheet[f"C{row}"] = record["product"]
+        worksheet[f"D{row}"] = record["heat_temp"]
+        worksheet[f"E{row}"] = record["oil_set_temp"]
+        worksheet[f"F{row}"] = record["oil_now_temp"]
+        worksheet[f"G{row}"] = record["steam_usage"]
+        worksheet[f"H{row}"] = record["ct_water"]
 
         if machine in FLOW_PRESSURE_MACHINES:
             write_multiline_cell(
                 worksheet,
-                f"K{row}",
+                f"I{row}",
                 make_flow_pressure_text(
                     record["inlet_flow"],
                     record["inlet_pressure"],
@@ -537,7 +480,7 @@ def make_template_excel(selected_date):
 
             write_multiline_cell(
                 worksheet,
-                f"M{row}",
+                f"J{row}",
                 make_flow_pressure_text(
                     record["middle_flow"],
                     record["middle_pressure"],
@@ -546,7 +489,7 @@ def make_template_excel(selected_date):
 
             write_multiline_cell(
                 worksheet,
-                f"O{row}",
+                f"K{row}",
                 make_flow_pressure_text(
                     record["outlet_flow"],
                     record["outlet_pressure"],
@@ -554,23 +497,13 @@ def make_template_excel(selected_date):
             )
 
         else:
-            write_cell_value(
-                worksheet,
-                f"K{row}",
-                excel_value(record["inlet_pressure"]),
-            )
+            worksheet[f"I{row}"] = record["inlet_pressure"]
+            worksheet[f"J{row}"] = record["middle_pressure"]
+            worksheet[f"K{row}"] = record["outlet_pressure"]
 
-            write_cell_value(
-                worksheet,
-                f"M{row}",
-                excel_value(record["middle_pressure"]),
-            )
-
-            write_cell_value(
-                worksheet,
-                f"O{row}",
-                excel_value(record["outlet_pressure"]),
-            )
+    # 비고도 일단 엑셀에는 입력하지 않음.
+    # 원본 하단 양식 보호 목적.
+    # 앱 저장 기록에는 비고가 그대로 저장됨.
 
     output = BytesIO()
     workbook.save(output)
@@ -645,78 +578,64 @@ with tab_input:
         index=default_machine_index,
     )
 
-    product = st.text_input(
-        "제품명",
-        key=f"{machine}_product",
-    )
+    product = st.text_input("제품명")
 
     heat_temp_text = number_text_input(
         "열교환기 온도",
         "heat_temp",
-        machine,
     )
 
     oil_set_temp_text = number_text_input(
         "유탕온도 설정",
         "oil_set_temp",
-        machine,
     )
 
     oil_now_temp_text = number_text_input(
         "유탕온도 현재",
         "oil_now_temp",
-        machine,
     )
 
     steam_usage_text = number_text_input(
         "증기 사용량",
         "steam_usage",
-        machine,
     )
 
     ct_water_text = number_text_input(
         "C/T수",
         "ct_water",
-        machine,
     )
 
     if machine in FLOW_PRESSURE_MACHINES:
-        st.markdown("#### 증기 입구 / 중간 / 출구")
+        st.markdown("#### 증기 입구 / 중앙 / 출구")
 
         inlet_flow_text = number_text_input(
             "입구 유량",
             "inlet_flow",
-            machine,
         )
 
         inlet_pressure_text = number_text_input(
             "입구 압력",
             "inlet_pressure",
-            machine,
         )
 
         middle_flow_text = number_text_input(
-            "중간 유량",
+            "중앙 유량",
             "middle_flow",
-            machine,
         )
 
         middle_pressure_text = number_text_input(
-            "중간 압력",
+            "중앙 압력",
             "middle_pressure",
-            machine,
         )
 
         outlet_flow_text = number_text_input(
             "출구 유량",
             "outlet_flow",
-            machine,
         )
 
         outlet_pressure_text = number_text_input(
             "출구 압력",
             "outlet_pressure",
-            machine,
         )
 
     else:
@@ -727,25 +646,19 @@ with tab_input:
         inlet_pressure_text = number_text_input(
             "입구 압력",
             "inlet_pressure",
-            machine,
         )
 
         middle_pressure_text = number_text_input(
-            "중간 압력",
+            "중앙 압력",
             "middle_pressure",
-            machine,
         )
 
         outlet_pressure_text = number_text_input(
             "출구 압력",
             "outlet_pressure",
-            machine,
         )
 
-    memo = st.text_area(
-        "비고",
-        key=f"{machine}_memo",
-    )
+    memo = st.text_area("비고")
 
     submitted = st.button(
         "저장",
@@ -798,12 +711,12 @@ with tab_input:
 
             middle_flow = parse_number(
                 middle_flow_text,
-                "중간 유량",
+                "중앙 유량",
             )
 
             middle_pressure = parse_number(
                 middle_pressure_text,
-                "중간 압력",
+                "중앙 압력",
             )
 
             outlet_flow = parse_number(
@@ -898,8 +811,8 @@ with tab_records:
                     "C/T수": record["ct_water"],
                     "입구유량": record["inlet_flow"],
                     "입구압력": record["inlet_pressure"],
-                    "중간유량": record["middle_flow"],
-                    "중간압력": record["middle_pressure"],
+                    "중앙유량": record["middle_flow"],
+                    "중앙압력": record["middle_pressure"],
                     "출구유량": record["outlet_flow"],
                     "출구압력": record["outlet_pressure"],
                     "비고": record["memo"],
