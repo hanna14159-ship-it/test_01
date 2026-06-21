@@ -534,7 +534,10 @@ def make_template_excel(selected_date):
         write_cell_value(worksheet, f"D{row}", record["heat_temp"])
         write_cell_value(worksheet, f"E{row}", record["oil_set_temp"])
         write_cell_value(worksheet, f"F{row}", record["oil_now_temp"])
-        write_cell_value(worksheet, f"G{row}", record["steam_usage"])
+if record["steam_usage"] is None:
+    write_cell_value(worksheet, f"G{row}", ".")
+else:
+    write_cell_value(worksheet, f"G{row}", record["steam_usage"])
         write_cell_value(worksheet, f"H{row}", record["ct_water"])
 
         if machine in FLOW_PRESSURE_MACHINES:
