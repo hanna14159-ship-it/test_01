@@ -31,20 +31,20 @@ MACHINES = [
 # 둘째 줄: 압력
 FLOW_PRESSURE_MACHINES = ["11", "51"]
 
-# 호기별 Excel 입력 행
+# steamer_template(3).xlsx 기준 실제 입력 행
 MACHINE_ROW_MAP = {
-    "11": 8,
-    "12": 9,
-    "13": 10,
-    "14": 11,
-    "21": 12,
-    "22": 13,
-    "23": 14,
-    "24": 15,
-    "51": 16,
-    "52": 17,
-    "53": 18,
-    "54": 19,
+    "11": 11,
+    "12": 12,
+    "13": 13,
+    "14": 14,
+    "21": 15,
+    "22": 16,
+    "23": 17,
+    "24": 18,
+    "51": 19,
+    "52": 20,
+    "53": 21,
+    "54": 22,
 }
 
 
@@ -266,7 +266,7 @@ def load_records(selected_date):
             updated_at
         FROM steamer_logs
         WHERE check_date = ?
-        ORDER BY machine ASC
+        ORDER BY CAST(machine AS INTEGER) ASC
         """,
         (date_text,),
     ).fetchall()
@@ -335,7 +335,24 @@ def format_number(value):
     if value is None:
         return ""
 
+    if isinstance(value, float):
+        return f"{value:.5f}".rstrip("0").rstrip(".")
+
     return str(value)
+
+
+def excel_value(value, dot_if_empty=False):
+    """
+    Excel 입력용 값 변환.
+    증기 사용량처럼 빈칸에 .을 찍어야 하는 경우 dot_if_empty=True.
+    """
+
+    if value is None:
+        if dot_if_empty:
+            return "."
+        return None
+
+    return value
 
 
 def number_text_input(label, key):
@@ -374,6 +391,33 @@ def get_machine_from_url():
 # 5. Excel 보조 함수
 # ==================================================
 
+def get_writable_cell_address(worksheet, cell_address):
+    """
+    병합셀 내부 좌표가 들어오면
+    실제로 값을 쓸 수 있는 병합 범위의 왼쪽 위 셀 주소를 반환한다.
+    병합셀이 아니면 원래 주소를 그대로 반환한다.
+    """
+
+    for merged_range in worksheet.merged_cells.ranges:
+        if cell_address in merged_range:
+            return merged_range.start_cell.coordinate
+
+    return cell_address
+
+
+def write_cell_value(worksheet, cell_address, value):
+    """
+    병합셀 오류 방지용 값 입력 함수.
+    """
+
+    writable_cell_address = get_writable_cell_address(
+        worksheet,
+        cell_address,
+    )
+
+    worksheet[writable_cell_address] = value
+
+
 def make_flow_pressure_text(flow, pressure):
     """
     유량과 압력을 한 셀에 두 줄로 넣는다.
@@ -393,13 +437,16 @@ def make_flow_pressure_text(flow, pressure):
 
 def write_multiline_cell(worksheet, cell_address, value):
     """
-    원본 셀 서식은 건드리지 않고 값만 넣는다.
-    줄바꿈 표시를 위해 wrap_text만 기존 정렬 기반으로 켠다.
-
-    테두리, 결재칸, 행높이, 열너비는 건드리지 않는다.
+    유량/압력 두 줄 입력.
+    병합셀에도 안전하게 입력.
     """
 
-    cell = worksheet[cell_address]
+    writable_cell_address = get_writable_cell_address(
+        worksheet,
+        cell_address,
+    )
+
+    cell = worksheet[writable_cell_address]
     cell.value = value
 
     old_alignment = copy(cell.alignment)
@@ -420,10 +467,19 @@ def write_multiline_cell(worksheet, cell_address, value):
 
 def make_template_excel(selected_date):
     """
-    기존 .xlsx 원본 양식을 그대로 열어서
-    값만 지정된 셀에 입력한다.
+    steamer_template(3).xlsx 기준 좌표.
 
-    테두리, 결재칸, 행높이, 열너비, 병합셀은 건드리지 않는다.
+    날짜: A6
+    점검시간: B열
+    제품명: C열
+    열교환기 온도: D열
+    유탕온도 설정: E열
+    유탕온도 현재: F열
+    증기 사용량: G열
+    C/T수: H열, 실제 병합 H:J
+    입구: K열, 실제 병합 K:L
+    중앙: M열, 실제 병합 M:N
+    출구: O열
     """
 
     if not Path(TEMPLATE_PATH).exists():
@@ -435,7 +491,11 @@ def make_template_excel(selected_date):
     records = load_records(selected_date)
 
     workbook = load_workbook(TEMPLATE_PATH)
-    worksheet = workbook.active
+
+    if "Sheet1" in workbook.sheetnames:
+        worksheet = workbook["Sheet1"]
+    else:
+        worksheet = workbook.active
 
     weekday_names = [
         "월", "화", "수", "목", "금", "토", "일"
@@ -443,12 +503,16 @@ def make_template_excel(selected_date):
 
     weekday = weekday_names[selected_date.weekday()]
 
-    # 날짜 값만 입력
-    worksheet["A5"] = (
-        f"{selected_date.year}년 "
-        f"{selected_date.month}월 "
-        f"{selected_date.day}일 "
-        f"{weekday}요일"
+    # 날짜 입력: A6:D8 병합셀
+    write_cell_value(
+        worksheet,
+        "A6",
+        (
+            f"  {selected_date.year} 년      "
+            f"{selected_date.month} 월        "
+            f"{selected_date.day} 일         "
+            f"{weekday}요일"
+        ),
     )
 
     for record in records:
@@ -459,19 +523,31 @@ def make_template_excel(selected_date):
 
         row = MACHINE_ROW_MAP[machine]
 
-        # 값만 입력. 원본 셀 서식은 유지.
-        worksheet[f"B{row}"] = record["check_time"]
-        worksheet[f"C{row}"] = record["product"]
-        worksheet[f"D{row}"] = record["heat_temp"]
-        worksheet[f"E{row}"] = record["oil_set_temp"]
-        worksheet[f"F{row}"] = record["oil_now_temp"]
-        worksheet[f"G{row}"] = record["steam_usage"]
-        worksheet[f"H{row}"] = record["ct_water"]
+        # 기본 수치 입력
+        write_cell_value(worksheet, f"B{row}", record["check_time"])
+        write_cell_value(worksheet, f"C{row}", record["product"])
+        write_cell_value(worksheet, f"D{row}", excel_value(record["heat_temp"]))
+        write_cell_value(worksheet, f"E{row}", excel_value(record["oil_set_temp"]))
+        write_cell_value(worksheet, f"F{row}", excel_value(record["oil_now_temp"]))
 
+        # 증기 사용량은 값이 없으면 "." 입력
+        write_cell_value(
+            worksheet,
+            f"G{row}",
+            excel_value(record["steam_usage"], dot_if_empty=True),
+        )
+
+        # C/T수: H:J 병합셀, H에 입력
+        write_cell_value(worksheet, f"H{row}", excel_value(record["ct_water"]))
+
+        # 증기 압력 영역
+        # 입구: K:L 병합셀, K에 입력
+        # 중앙: M:N 병합셀, M에 입력
+        # 출구: O열 단독, O에 입력
         if machine in FLOW_PRESSURE_MACHINES:
             write_multiline_cell(
                 worksheet,
-                f"I{row}",
+                f"K{row}",
                 make_flow_pressure_text(
                     record["inlet_flow"],
                     record["inlet_pressure"],
@@ -480,7 +556,7 @@ def make_template_excel(selected_date):
 
             write_multiline_cell(
                 worksheet,
-                f"J{row}",
+                f"M{row}",
                 make_flow_pressure_text(
                     record["middle_flow"],
                     record["middle_pressure"],
@@ -489,7 +565,7 @@ def make_template_excel(selected_date):
 
             write_multiline_cell(
                 worksheet,
-                f"K{row}",
+                f"O{row}",
                 make_flow_pressure_text(
                     record["outlet_flow"],
                     record["outlet_pressure"],
@@ -497,13 +573,23 @@ def make_template_excel(selected_date):
             )
 
         else:
-            worksheet[f"I{row}"] = record["inlet_pressure"]
-            worksheet[f"J{row}"] = record["middle_pressure"]
-            worksheet[f"K{row}"] = record["outlet_pressure"]
+            write_cell_value(
+                worksheet,
+                f"K{row}",
+                excel_value(record["inlet_pressure"]),
+            )
 
-    # 비고도 일단 엑셀에는 입력하지 않음.
-    # 원본 하단 양식 보호 목적.
-    # 앱 저장 기록에는 비고가 그대로 저장됨.
+            write_cell_value(
+                worksheet,
+                f"M{row}",
+                excel_value(record["middle_pressure"]),
+            )
+
+            write_cell_value(
+                worksheet,
+                f"O{row}",
+                excel_value(record["outlet_pressure"]),
+            )
 
     output = BytesIO()
     workbook.save(output)
