@@ -25,13 +25,8 @@ MACHINES = [
     "51", "52", "53", "54",
 ]
 
-# 11호기, 51호기만
-# 입구/중간/출구 칸에
-# 첫째 줄: 유량
-# 둘째 줄: 압력
 FLOW_PRESSURE_MACHINES = ["11", "51"]
 
-# 방금 올린 steamer_template.xlsx 기준 실제 입력 행
 MACHINE_ROW_MAP = {
     "11": 11,
     "12": 12,
@@ -220,23 +215,23 @@ def save_or_update_record(record):
               AND machine = ?
             """,
             (
-                record[1],    # check_time
-                record[3],    # product
-                record[4],    # heat_temp
-                record[5],    # oil_set_temp
-                record[6],    # oil_now_temp
-                record[7],    # steam_usage
-                record[8],    # ct_water
-                record[9],    # inlet_flow
-                record[10],   # inlet_pressure
-                record[11],   # middle_flow
-                record[12],   # middle_pressure
-                record[13],   # outlet_flow
-                record[14],   # outlet_pressure
-                record[15],   # memo
-                record[17],   # updated_at
-                record[0],    # check_date
-                record[2],    # machine
+                record[1],
+                record[3],
+                record[4],
+                record[5],
+                record[6],
+                record[7],
+                record[8],
+                record[9],
+                record[10],
+                record[11],
+                record[12],
+                record[13],
+                record[14],
+                record[15],
+                record[17],
+                record[0],
+                record[2],
             ),
         )
 
@@ -332,6 +327,15 @@ def format_number(value):
     return str(value)
 
 
+def excel_value(value, dot_if_empty=False):
+    if value is None:
+        if dot_if_empty:
+            return "."
+        return None
+
+    return value
+
+
 def number_text_input(label, key):
     return st.text_input(
         label,
@@ -359,8 +363,8 @@ def get_machine_from_url():
 
 def get_writable_cell_address(worksheet, cell_address):
     """
-    병합셀 안쪽 좌표가 들어오면
-    실제로 값을 쓸 수 있는 병합 범위의 왼쪽 위 셀을 반환.
+    병합셀 내부 주소가 들어오면 실제로 값을 쓸 수 있는
+    병합 범위의 왼쪽 위 셀 주소를 반환한다.
     """
 
     for merged_range in worksheet.merged_cells.ranges:
@@ -425,7 +429,7 @@ def write_multiline_cell(worksheet, cell_address, value):
 
 def make_template_excel(selected_date):
     """
-    방금 업로드한 steamer_template.xlsx 기준 좌표.
+    steamer_template(2).xlsx 기준 좌표.
 
     날짜: A6
     점검시간: B열
@@ -434,10 +438,10 @@ def make_template_excel(selected_date):
     유탕온도 설정: E열
     유탕온도 현재: F열
     증기 사용량: G열
-    C/T수: H열, 실제 병합 H:J
-    입구 압력: K열, 실제 병합 K:L
-    중간 압력: M열, 실제 병합 M:N
-    출구 압력: O열
+    C/T수: H열
+    입구: K열
+    중간: M열
+    출구: O열
     """
 
     if not Path(TEMPLATE_PATH).exists():
@@ -449,7 +453,12 @@ def make_template_excel(selected_date):
     records = load_records(selected_date)
 
     workbook = load_workbook(TEMPLATE_PATH)
-    worksheet = workbook.active
+
+    # active가 다른 시트로 잡히는 문제 방지
+    if "Sheet1" in workbook.sheetnames:
+        worksheet = workbook["Sheet1"]
+    else:
+        worksheet = workbook.worksheets[0]
 
     weekday_names = [
         "월", "화", "수", "목", "금", "토", "일"
@@ -457,7 +466,6 @@ def make_template_excel(selected_date):
 
     weekday = weekday_names[selected_date.weekday()]
 
-    # 날짜 입력: A6:D8 병합셀
     write_cell_value(
         worksheet,
         "A6",
@@ -477,26 +485,40 @@ def make_template_excel(selected_date):
 
         row = MACHINE_ROW_MAP[machine]
 
-        # 기본 수치 입력
         write_cell_value(worksheet, f"B{row}", record["check_time"])
         write_cell_value(worksheet, f"C{row}", record["product"])
-        write_cell_value(worksheet, f"D{row}", record["heat_temp"])
-        write_cell_value(worksheet, f"E{row}", record["oil_set_temp"])
-        write_cell_value(worksheet, f"F{row}", record["oil_now_temp"])
+
+        write_cell_value(
+            worksheet,
+            f"D{row}",
+            excel_value(record["heat_temp"]),
+        )
+
+        write_cell_value(
+            worksheet,
+            f"E{row}",
+            excel_value(record["oil_set_temp"]),
+        )
+
+        write_cell_value(
+            worksheet,
+            f"F{row}",
+            excel_value(record["oil_now_temp"]),
+        )
 
         # 증기 사용량은 값이 없으면 "." 입력
-        if record["steam_usage"] is None:
-            write_cell_value(worksheet, f"G{row}", ".")
-        else:
-            write_cell_value(worksheet, f"G{row}", record["steam_usage"])
+        write_cell_value(
+            worksheet,
+            f"G{row}",
+            excel_value(record["steam_usage"], dot_if_empty=True),
+        )
 
-        # C/T수: H:J 병합셀
-        write_cell_value(worksheet, f"H{row}", record["ct_water"])
+        write_cell_value(
+            worksheet,
+            f"H{row}",
+            excel_value(record["ct_water"]),
+        )
 
-        # 증기 압력 영역
-        # 입구: K:L 병합셀
-        # 중간: M:N 병합셀
-        # 출구: O열 단독
         if machine in FLOW_PRESSURE_MACHINES:
             write_multiline_cell(
                 worksheet,
@@ -529,19 +551,19 @@ def make_template_excel(selected_date):
             write_cell_value(
                 worksheet,
                 f"K{row}",
-                record["inlet_pressure"],
+                excel_value(record["inlet_pressure"]),
             )
 
             write_cell_value(
                 worksheet,
                 f"M{row}",
-                record["middle_pressure"],
+                excel_value(record["middle_pressure"]),
             )
 
             write_cell_value(
                 worksheet,
                 f"O{row}",
-                record["outlet_pressure"],
+                excel_value(record["outlet_pressure"]),
             )
 
     output = BytesIO()
