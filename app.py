@@ -8,6 +8,11 @@ from zoneinfo import ZoneInfo
 import streamlit as st
 from openpyxl import load_workbook
 from openpyxl.styles import Alignment
+from openpyxl.drawing.image import Image
+from openpyxl.drawing.spreadsheet_drawing import AnchorMarker, OneCellAnchor
+from openpyxl.drawing.xdr import XDRPositiveSize2D
+from openpyxl.utils import get_column_letter, column_index_from_string
+from openpyxl.utils.units import pixels_to_EMU
 
 
 # ==================================================
@@ -16,6 +21,7 @@ from openpyxl.styles import Alignment
 
 DB_PATH = "steamer.db"
 TEMPLATE_PATH = "steamer_template.xlsx"
+APPROVAL_IMAGE_PATH = "approval_box.png"
 
 KST = ZoneInfo("Asia/Seoul")
 
@@ -31,7 +37,7 @@ MACHINES = [
 # 둘째 줄: 압력
 FLOW_PRESSURE_MACHINES = ["11", "51"]
 
-# 업로드한 steamer_template.xlsx 기준 실제 입력 행
+# 현재 steamer_template.xlsx 기준 입력 행
 MACHINE_ROW_MAP = {
     "11": 11,
     "12": 12,
@@ -468,16 +474,104 @@ def write_multiline_cell(worksheet, cell_address, value):
     )
 
 
+def column_width_to_pixels(width):
+    """
+    Excel 열 너비를 대략적인 픽셀 값으로 변환.
+    """
+
+    if width is None:
+        width = 8.43
+
+    return int(width * 7 + 5)
+
+
+def find_image_start_from_top_right(worksheet, top_right_cell, image_width_px):
+    """
+    top_right_cell의 오른쪽 위 모서리를 기준으로
+    이미지의 오른쪽 위 모서리를 맞추기 위한 시작 위치 계산.
+    """
+
+    col_text = "".join([c for c in top_right_cell if c.isalpha()])
+    row_text = "".join([c for c in top_right_cell if c.isdigit()])
+
+    right_col_idx = column_index_from_string(col_text)
+    row_idx = int(row_text)
+
+    remaining_width = image_width_px
+    current_col_idx = right_col_idx
+
+    while current_col_idx >= 1:
+        col_letter = get_column_letter(current_col_idx)
+        col_width_px = column_width_to_pixels(
+            worksheet.column_dimensions[col_letter].width
+        )
+
+        if remaining_width <= col_width_px:
+            start_offset_px = col_width_px - remaining_width
+            return current_col_idx, start_offset_px, row_idx
+
+        remaining_width -= col_width_px
+        current_col_idx -= 1
+
+    return 1, 0, row_idx
+
+
+def insert_approval_image_top_right(
+    worksheet,
+    image_path,
+    top_right_cell="K5",
+    image_width_px=220,
+    image_height_px=60,
+):
+    """
+    approval_box.png를 삽입하되,
+    이미지의 오른쪽 위 모서리를
+    top_right_cell의 오른쪽 위 모서리에 맞춘다.
+    """
+
+    if not Path(image_path).exists():
+        return
+
+    start_col_idx, start_offset_px, row_idx = find_image_start_from_top_right(
+        worksheet,
+        top_right_cell,
+        image_width_px,
+    )
+
+    img = Image(image_path)
+    img.width = image_width_px
+    img.height = image_height_px
+
+    marker = AnchorMarker(
+        col=start_col_idx - 1,
+        colOff=pixels_to_EMU(start_offset_px),
+        row=row_idx - 1,
+        rowOff=0,
+    )
+
+    size = XDRPositiveSize2D(
+        cx=pixels_to_EMU(image_width_px),
+        cy=pixels_to_EMU(image_height_px),
+    )
+
+    img.anchor = OneCellAnchor(
+        _from=marker,
+        ext=size,
+    )
+
+    worksheet.add_image(img)
+
+
 # ==================================================
 # 6. Excel 생성 함수
 # ==================================================
 
 def make_template_excel(selected_date):
     """
-    업로드한 steamer_template.xlsx 원본 양식을 그대로 열어서
+    steamer_template.xlsx 원본 양식을 열어서
     값만 지정된 셀에 입력한다.
 
-    결재칸, 테두리, 행높이, 열너비, 병합셀은 건드리지 않는다.
+    결재칸은 approval_box.png를 K5 우측 상단 모서리 기준으로 삽입한다.
     """
 
     if not Path(TEMPLATE_PATH).exists():
@@ -497,7 +591,7 @@ def make_template_excel(selected_date):
 
     weekday = weekday_names[selected_date.weekday()]
 
-    # 실제 원본 기준 날짜 입력 위치: A6:D8 병합셀
+    # 날짜 입력 위치
     write_cell_value(
         worksheet,
         "A6",
@@ -509,6 +603,15 @@ def make_template_excel(selected_date):
         ),
     )
 
+    # 결재칸 그림 삽입
+    insert_approval_image_top_right(
+        worksheet,
+        APPROVAL_IMAGE_PATH,
+        top_right_cell="K5",
+        image_width_px=220,
+        image_height_px=60,
+    )
+
     for record in records:
         machine = record["machine"]
 
@@ -517,27 +620,18 @@ def make_template_excel(selected_date):
 
         row = MACHINE_ROW_MAP[machine]
 
-        # 실제 원본 기준 입력 좌표
-        # B: 점검시간
-        # C: 제품명
-        # D: 열교환기 온도
-        # E: 유탕온도 설정
-        # F: 유탕온도 현재
-        # G: 증기 사용량
-        # H:J: C/T수
-        # K:L: 입구
-        # M:N: 중앙
-        # O: 출구
-
         write_cell_value(worksheet, f"B{row}", record["check_time"])
         write_cell_value(worksheet, f"C{row}", record["product"])
         write_cell_value(worksheet, f"D{row}", record["heat_temp"])
         write_cell_value(worksheet, f"E{row}", record["oil_set_temp"])
         write_cell_value(worksheet, f"F{row}", record["oil_now_temp"])
-if record["steam_usage"] is None:
-    write_cell_value(worksheet, f"G{row}", ".")
-else:
-    write_cell_value(worksheet, f"G{row}", record["steam_usage"])
+
+        # 증기 사용량은 값이 없으면 엑셀에 "." 입력
+        if record["steam_usage"] is None:
+            write_cell_value(worksheet, f"G{row}", ".")
+        else:
+            write_cell_value(worksheet, f"G{row}", record["steam_usage"])
+
         write_cell_value(worksheet, f"H{row}", record["ct_water"])
 
         if machine in FLOW_PRESSURE_MACHINES:
@@ -588,7 +682,6 @@ else:
             )
 
     # 비고는 현재 Excel에는 입력하지 않음.
-    # 원본 하단 양식 보호 목적.
     # 앱 저장 기록에는 비고가 그대로 저장됨.
 
     output = BytesIO()
