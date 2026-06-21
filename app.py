@@ -25,8 +25,10 @@ MACHINES = [
     "51", "52", "53", "54",
 ]
 
+# 11호기, 51호기만 유량 + 압력 2줄 입력
 FLOW_PRESSURE_MACHINES = ["11", "51"]
 
+# 현재 템플릿 기준 행
 MACHINE_ROW_MAP = {
     "11": 11,
     "12": 12,
@@ -336,10 +338,15 @@ def excel_value(value, dot_if_empty=False):
     return value
 
 
-def number_text_input(label, key):
+def number_text_input(label, key, machine):
+    """
+    호기별로 입력창 key를 분리한다.
+    예: 11_heat_temp, 12_heat_temp
+    """
+
     return st.text_input(
         label,
-        key=key,
+        key=f"{machine}_{key}",
         placeholder="예: 123.45",
     )
 
@@ -363,7 +370,7 @@ def get_machine_from_url():
 
 def get_writable_cell_address(worksheet, cell_address):
     """
-    병합셀 내부 주소가 들어오면 실제로 값을 쓸 수 있는
+    병합셀 내부 좌표가 들어오면 실제로 값을 쓸 수 있는
     병합 범위의 왼쪽 위 셀 주소를 반환한다.
     """
 
@@ -429,7 +436,7 @@ def write_multiline_cell(worksheet, cell_address, value):
 
 def make_template_excel(selected_date):
     """
-    steamer_template(2).xlsx 기준 좌표.
+    현재 steamer_template.xlsx 기준 좌표.
 
     날짜: A6
     점검시간: B열
@@ -454,7 +461,6 @@ def make_template_excel(selected_date):
 
     workbook = load_workbook(TEMPLATE_PATH)
 
-    # active가 다른 시트로 잡히는 문제 방지
     if "Sheet1" in workbook.sheetnames:
         worksheet = workbook["Sheet1"]
     else:
@@ -639,31 +645,39 @@ with tab_input:
         index=default_machine_index,
     )
 
-    product = st.text_input("제품명")
+    product = st.text_input(
+        "제품명",
+        key=f"{machine}_product",
+    )
 
     heat_temp_text = number_text_input(
         "열교환기 온도",
         "heat_temp",
+        machine,
     )
 
     oil_set_temp_text = number_text_input(
         "유탕온도 설정",
         "oil_set_temp",
+        machine,
     )
 
     oil_now_temp_text = number_text_input(
         "유탕온도 현재",
         "oil_now_temp",
+        machine,
     )
 
     steam_usage_text = number_text_input(
         "증기 사용량",
         "steam_usage",
+        machine,
     )
 
     ct_water_text = number_text_input(
         "C/T수",
         "ct_water",
+        machine,
     )
 
     if machine in FLOW_PRESSURE_MACHINES:
@@ -672,31 +686,37 @@ with tab_input:
         inlet_flow_text = number_text_input(
             "입구 유량",
             "inlet_flow",
+            machine,
         )
 
         inlet_pressure_text = number_text_input(
             "입구 압력",
             "inlet_pressure",
+            machine,
         )
 
         middle_flow_text = number_text_input(
             "중간 유량",
             "middle_flow",
+            machine,
         )
 
         middle_pressure_text = number_text_input(
             "중간 압력",
             "middle_pressure",
+            machine,
         )
 
         outlet_flow_text = number_text_input(
             "출구 유량",
             "outlet_flow",
+            machine,
         )
 
         outlet_pressure_text = number_text_input(
             "출구 압력",
             "outlet_pressure",
+            machine,
         )
 
     else:
@@ -707,19 +727,25 @@ with tab_input:
         inlet_pressure_text = number_text_input(
             "입구 압력",
             "inlet_pressure",
+            machine,
         )
 
         middle_pressure_text = number_text_input(
             "중간 압력",
             "middle_pressure",
+            machine,
         )
 
         outlet_pressure_text = number_text_input(
             "출구 압력",
             "outlet_pressure",
+            machine,
         )
 
-    memo = st.text_area("비고")
+    memo = st.text_area(
+        "비고",
+        key=f"{machine}_memo",
+    )
 
     submitted = st.button(
         "저장",
